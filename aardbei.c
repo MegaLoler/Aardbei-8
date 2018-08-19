@@ -55,13 +55,13 @@ struct CPUState {
 /* MEMORY */
 
 #define EEPROM_SIZE (1024*8)
-#define RAM_SIZE (1024*24)
-#define BANK_SIZE (1024*16)
-#define FLASH_SIZE (1024*512)
+#define RAM_SIZE    (1024*24)
+#define BANK_SIZE   (1024*16)
+#define FLASH_SIZE  (1024*512)
 
 #define EEPROM_BASE (1024*56)
-#define RAM_BASE (1024*32)
-#define BANK_BASE (1024*16)
+#define RAM_BASE    (1024*32)
+#define BANK_BASE   (1024*16)
 
 struct Memory {
 	uint8_t eeprom[EEPROM_SIZE]; // mmap this
@@ -151,6 +151,29 @@ void swapWord(uint16_t *a, uint16_t *b) {
 	*b = tmp;
 }
 
+void swapRegs(struct CPUState *cpu) {
+	struct RegisterSet tmp = cpu->regs.main;
+	cpu->regs.main = cpu->regs.alt;
+	cpu->regs.alt = tmp;
+}
+
+#define C_FLAG  (1)
+#define N_FLAG  (1 << 1)
+#define PV_FLAG (1 << 2)
+#define H_FLAG  (1 << 4)
+#define Z_FLAG  (1 << 6)
+#define S_FLAG  (1 << 7)
+
+#define SET_FLAG   (F) (cpu->regs.main.f |= F)
+#define RESET_FLAG (F) (cpu->regs.main.f &= ~F)
+
+#define SET_C  (N) (N ? SET_FLAG(C_FLAG)  : RESET_FLAG(C_FLAG))
+#define SET_N  (N) (N ? SET_FLAG(N_FLAG)  : RESET_FLAG(N_FLAG))
+#define SET_PV (N) (N ? SET_FLAG(PV_FLAG) : RESET_FLAG(PV_FLAG))
+#define SET_H  (N) (N ? SET_FLAG(H_FLAG)  : RESET_FLAG(H_FLAG))
+#define SET_Z  (N) (N ? SET_FLAG(Z_FLAG)  : RESET_FLAG(Z_FLAG))
+#define SET_S  (N) (N ? SET_FLAG(S_FLAG)  : RESET_FLAG(S_FLAG))
+
 // perform one instruction cycle
 void step(struct CPUState *cpu, struct Memory *memory) {
 	uint8_t opcode = fetchOpcode(cpu, memory);
@@ -187,7 +210,7 @@ void step(struct CPUState *cpu, struct Memory *memory) {
 			// TODO: set flags
 			cpu->regs.main.a
 				= cpu->regs.main.a << 1
-				| (cpu->regs.main.a & 0b10000000) >> 7;
+				| (cpu->regs.main.a & 1 << 7) >> 7;
 			break;
 		case 0x08: // ex af,af'
 			swapWord(&cpu->regs.main.af, &cpu->regs.alt.af);
@@ -219,7 +242,7 @@ void step(struct CPUState *cpu, struct Memory *memory) {
 			// TODO: set flags
 			cpu->regs.main.a
 				= cpu->regs.main.a >> 1
-				| (cpu->regs.main.a & 0b00000001) << 7;
+				| (cpu->regs.main.a & 1) << 7;
 			break;
 	}
 }
