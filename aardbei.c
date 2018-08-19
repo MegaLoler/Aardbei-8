@@ -220,7 +220,7 @@ int borrow(int pre, int post, int bit) {
 void step(struct CPUState *cpu, struct Memory *memory) {
 	uint8_t opcode = fetchOpcode(cpu, memory);
 #ifdef DEBUG
-	printf("\t@addr 0x%x: got opcode 0x%x\n", cpu->regs.pc, opcode);
+	printf("@addr 0x%x: got opcode 0x%x\n", cpu->regs.pc, opcode);
 #endif
 
 	int pre, post, c;
@@ -315,6 +315,8 @@ void step(struct CPUState *cpu, struct Memory *memory) {
 			SET_H(0);
 			SET_N(0);
 			break;
+		default:
+			fprintf(stderr, "[WARNING] Unknown opcode: 0x%x\n", opcode);
 	}
 }
 
@@ -328,11 +330,11 @@ int main(int argc, char *argv[]) {
 
 	while(1) {
 #ifdef DEBUG
-		printf("\ncycle %i:\n", CYCLES);
+		printf("\nT cycle %i:\n", CYCLES);
 #endif
 		step(cpu, memory);
 #ifdef DEBUG
-		printf("\tFLAGS:\n\t\t%i%i %i %i%i%i\n\t\tSZ-H-PNC\n\t\t     V  \n",
+		printf("FLAGS: %i%i %i %i%i%i\n       SZ-H-PNC\n",
 				GET_S,
 				GET_Z,
 				GET_H,
