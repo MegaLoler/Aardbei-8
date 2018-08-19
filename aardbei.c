@@ -2,7 +2,9 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-// cpu state
+#define DEBUG
+
+/* CPU STATE AND REGISTERS */
 
 struct RegisterSet {
 	union {
@@ -50,7 +52,7 @@ struct CPUState {
 	struct Registers regs;
 };
 
-// memory
+/* MEMORY */
 
 #define EEPROM_SIZE (1024*8)
 #define RAM_SIZE (1024*24)
@@ -79,36 +81,93 @@ uint8_t *addressDecode(struct Memory *memory, uint16_t addr) {
 		return &memory->eeprom[addr - EEPROM_BASE];
 }
 
+/* IO */
+
+struct Peripherals {
+
+};
+
+/* CPU CONTROL */
+
+int CYCLES;
+
+// wait n T cycles
+void sync(int cycles) {
+	CYCLES += cycles;
+}
+
+void out(struct Peripherals *peripherals, uint16_t port, uint8_t data) {
+	// TODO
+	sync(4);
+}
+
+uint8_t in(struct Peripherals *peripherals, uint16_t port) {
+	sync(4);
+	// TODO
+	return 0;
+}
+
 void writeByte(struct Memory *memory, uint16_t addr, uint8_t data) {
 	if(addr < RAM_BASE) // flash bank latch
 		memory->flashBank = data;
 	else *addressDecode(memory, addr) = data;
+	sync(3);
 }
 
 uint8_t readByte(struct Memory *memory, uint16_t addr) {
+	sync(3);
 	return *addressDecode(memory, addr);
 }
 
 uint16_t readWord(struct Memory *memory, uint16_t addr) {
+	sync(6);
 	return *addressDecode(memory, addr);
 }
 
-// cpu control
-
-void tick(struct CPUState *state, struct Memory *memory) {
-
+uint8_t fetchByte(struct CPUState *cpu, struct Memory *memory) {
+	return readByte(memory, cpu->regs.pc++);
 }
 
-// entry point
+uint16_t fetchWord(struct CPUState *cpu, struct Memory *memory) {
+	uint8_t low = fetchByte(cpu, memory);
+	uint8_t high = fetchByte(cpu, memory);
+	return low + (high << 8);
+}
+
+uint8_t fetchOpcode(struct CPUState *cpu, struct Memory *memory) {
+	sync(1);
+	return fetchByte(cpu, memory);
+}
+
+// perform one instruction cycle
+void step(struct CPUState *cpu, struct Memory *memory) {
+	uint8_t opcode = fetchOpcode(cpu, memory);
+#ifdef DEBUG
+	printf("\t@addr 0x%x: got opcode 0x%x\n\n", cpu->regs.pc, opcode);
+#endif
+
+	// switch all the opcodes lol
+	switch(opcode) {
+		case 0x00: // nop
+			break;
+		case 0x01: // ld bc,**
+			cpu->regs.main.bc = fetchWord(cpu, memory);
+	}
+}
+
+/* ENTRY POINT */
 
 int main(int argc, char *argv[]) {
 	// TODO: mmap flash and eeprom
+	CYCLES = 0;
 	struct CPUState *cpu = malloc(sizeof(struct CPUState));
 	struct Memory *memory = malloc(sizeof(struct Memory));
 
-	// TODO: replace this with alarm interrupt
 	while(1) {
-		tick(cpu, memory);
+#ifdef DEBUG
+		printf("cycle %i:\n", CYCLES);
+#endif
+		step(cpu, memory);
 	}
 	
 	return 0;
