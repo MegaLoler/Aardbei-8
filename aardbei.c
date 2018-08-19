@@ -186,8 +186,16 @@ int borrow(int pre, int post, int bit) {
 #define Z_FLAG  (1 << 6)
 #define S_FLAG  (1 << 7)
 
+#define GET_FLAG(F)   ((cpu->regs.main.f & F) != 0)
 #define SET_FLAG(F)   (cpu->regs.main.f |= F)
 #define RESET_FLAG(F) (cpu->regs.main.f &= ~F)
+
+#define GET_C  GET_FLAG(C_FLAG)
+#define GET_N  GET_FLAG(N_FLAG)
+#define GET_PV GET_FLAG(PV_FLAG)
+#define GET_H  GET_FLAG(H_FLAG)
+#define GET_Z  GET_FLAG(Z_FLAG)
+#define GET_S  GET_FLAG(S_FLAG)
 
 #define SET_C(N)  ((N) ? SET_FLAG(C_FLAG)  : RESET_FLAG(C_FLAG))
 #define SET_N(N)  ((N) ? SET_FLAG(N_FLAG)  : RESET_FLAG(N_FLAG))
@@ -212,7 +220,7 @@ int borrow(int pre, int post, int bit) {
 void step(struct CPUState *cpu, struct Memory *memory) {
 	uint8_t opcode = fetchOpcode(cpu, memory);
 #ifdef DEBUG
-	printf("\t@addr 0x%x: got opcode 0x%x\n\n", cpu->regs.pc, opcode);
+	printf("\t@addr 0x%x: got opcode 0x%x\n", cpu->regs.pc, opcode);
 #endif
 
 	int pre, post, c;
@@ -320,9 +328,18 @@ int main(int argc, char *argv[]) {
 
 	while(1) {
 #ifdef DEBUG
-		printf("cycle %i:\n", CYCLES);
+		printf("\ncycle %i:\n", CYCLES);
 #endif
 		step(cpu, memory);
+#ifdef DEBUG
+		printf("\tFLAGS:\n\t\t%i%i %i %i%i%i\n\t\tSZ-H-PNC\n\t\t     V  \n",
+				GET_S,
+				GET_Z,
+				GET_H,
+				GET_PV,
+				GET_N,
+				GET_C);
+#endif
 	}
 	
 	return 0;
