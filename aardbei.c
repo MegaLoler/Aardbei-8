@@ -62,9 +62,9 @@ struct CPUState {
 #define BANK_BASE (1024*16)
 
 struct Memory {
-	uint8_t eeprom[EEPROM_SIZE];
+	uint8_t eeprom[EEPROM_SIZE]; // mmap this
 	uint8_t ram[RAM_SIZE];
-	uint8_t flash[FLASH_SIZE];
+	uint8_t flash[FLASH_SIZE]; // mmap this
 	uint8_t flashBank;
 };
 
@@ -79,21 +79,37 @@ uint8_t *addressDecode(struct Memory *memory, uint16_t addr) {
 		return &memory->eeprom[addr - EEPROM_BASE];
 }
 
+void writeByte(struct Memory *memory, uint16_t addr, uint8_t data) {
+	if(addr < RAM_BASE) // flash bank latch
+		memory->flashBank = data;
+	else *addressDecode(memory, addr) = data;
+}
+
 uint8_t readByte(struct Memory *memory, uint16_t addr) {
+	return *addressDecode(memory, addr);
+}
+
+uint16_t readWord(struct Memory *memory, uint16_t addr) {
 	return *addressDecode(memory, addr);
 }
 
 // cpu control
 
-void tick(struct CPUState *state) {
+void tick(struct CPUState *state, struct Memory *memory) {
 
 }
 
 // entry point
 
 int main(int argc, char *argv[]) {
+	// TODO: mmap flash and eeprom
 	struct CPUState *cpu = malloc(sizeof(struct CPUState));
+	struct Memory *memory = malloc(sizeof(struct Memory));
 
+	// TODO: replace this with alarm interrupt
+	while(1) {
+		tick(cpu, memory);
+	}
 	
 	return 0;
 }
