@@ -139,6 +139,18 @@ uint8_t fetchOpcode(struct CPUState *cpu, struct Memory *memory) {
 	return fetchByte(cpu, memory);
 }
 
+void swapByte(uint8_t *a, uint8_t *b) {
+	uint8_t tmp = *a;
+	*a = *b;
+	*b = tmp;
+}
+
+void swapWord(uint16_t *a, uint16_t *b) {
+	uint16_t tmp = *a;
+	*a = *b;
+	*b = tmp;
+}
+
 // perform one instruction cycle
 void step(struct CPUState *cpu, struct Memory *memory) {
 	uint8_t opcode = fetchOpcode(cpu, memory);
@@ -152,6 +164,63 @@ void step(struct CPUState *cpu, struct Memory *memory) {
 			break;
 		case 0x01: // ld bc,**
 			cpu->regs.main.bc = fetchWord(cpu, memory);
+			break;
+		case 0x02: // ld (bc),a
+			writeByte(memory, cpu->regs.main.bc, cpu->regs.main.a);
+			break;
+		case 0x03: // inc bc
+			sync(2);
+			cpu->regs.main.bc++;
+			break;
+		case 0x04: // inc b
+			// TODO: set flags
+			cpu->regs.main.b++;
+			break;
+		case 0x05: // dec b
+			// TODO: set flags
+			cpu->regs.main.b--;
+			break;
+		case 0x06: // ld b,*
+			cpu->regs.main.b = fetchByte(cpu, memory);
+			break;
+		case 0x07: // rlca
+			// TODO: set flags
+			cpu->regs.main.a
+				= cpu->regs.main.a << 1
+				| (cpu->regs.main.a & 0b10000000) >> 7;
+			break;
+		case 0x08: // ex af,af'
+			swapWord(&cpu->regs.main.af, &cpu->regs.alt.af);
+			break;
+		case 0x09: // add hl,bc
+			// TODO: set flags
+			sync(7);
+			cpu->regs.main.hl += cpu->regs.main.bc;
+			break;
+		case 0x0a: // ld a,(bc)
+			cpu->regs.main.a = readByte(memory, cpu->regs.main.bc);
+			break;
+		case 0x0b: // dec bc
+			sync(2);
+			cpu->regs.main.bc--;
+			break;
+		case 0x0c: // inc c
+			// TODO: set flags
+			cpu->regs.main.c++;
+			break;
+		case 0x0d: // dec c
+			// TODO: set flags
+			cpu->regs.main.c--;
+			break;
+		case 0x0e: // ld c,*
+			cpu->regs.main.c = fetchByte(cpu, memory);
+			break;
+		case 0x0f: // rrca
+			// TODO: set flags
+			cpu->regs.main.a
+				= cpu->regs.main.a >> 1
+				| (cpu->regs.main.a & 0b00000001) << 7;
+			break;
 	}
 }
 
