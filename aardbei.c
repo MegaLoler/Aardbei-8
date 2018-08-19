@@ -94,11 +94,12 @@ int CYCLES;
 // wait n T cycles
 void sync(int cycles) {
 	CYCLES += cycles;
+	// TODO: actually wait
 }
 
 void out(struct Peripherals *peripherals, uint16_t port, uint8_t data) {
-	// TODO
 	sync(4);
+	// TODO
 }
 
 uint8_t in(struct Peripherals *peripherals, uint16_t port) {
@@ -108,10 +109,10 @@ uint8_t in(struct Peripherals *peripherals, uint16_t port) {
 }
 
 void writeByte(struct Memory *memory, uint16_t addr, uint8_t data) {
+	sync(3);
 	if(addr < RAM_BASE) // flash bank latch
 		memory->flashBank = data;
 	else *addressDecode(memory, addr) = data;
-	sync(3);
 }
 
 uint8_t readByte(struct Memory *memory, uint16_t addr) {
@@ -157,6 +158,27 @@ void swapRegs(struct CPUState *cpu) {
 	cpu->regs.alt = tmp;
 }
 
+int parity(int n) {
+	int parity = 0;
+	while(n) {
+		parity = !parity;
+		n &= n - 1;
+	}
+	return parity;
+}
+
+// test to see if a carry occurred on some bit
+int carry(int pre, int post, int bit) {
+	int mask = 1 << bit;
+	return (pre & mask) & ~(post & mask);
+}
+
+// test to see if a borrow occurred on some bit
+int borrow(int pre, int post, int bit) {
+	int mask = 1 << bit;
+	return ~(pre & mask) & (post & mask);
+}
+
 #define C_FLAG  (1)
 #define N_FLAG  (1 << 1)
 #define PV_FLAG (1 << 2)
@@ -164,15 +186,27 @@ void swapRegs(struct CPUState *cpu) {
 #define Z_FLAG  (1 << 6)
 #define S_FLAG  (1 << 7)
 
-#define SET_FLAG   (F) (cpu->regs.main.f |= F)
-#define RESET_FLAG (F) (cpu->regs.main.f &= ~F)
+#define SET_FLAG(F)   (cpu->regs.main.f |= F)
+#define RESET_FLAG(F) (cpu->regs.main.f &= ~F)
 
-#define SET_C  (N) (N ? SET_FLAG(C_FLAG)  : RESET_FLAG(C_FLAG))
-#define SET_N  (N) (N ? SET_FLAG(N_FLAG)  : RESET_FLAG(N_FLAG))
-#define SET_PV (N) (N ? SET_FLAG(PV_FLAG) : RESET_FLAG(PV_FLAG))
-#define SET_H  (N) (N ? SET_FLAG(H_FLAG)  : RESET_FLAG(H_FLAG))
-#define SET_Z  (N) (N ? SET_FLAG(Z_FLAG)  : RESET_FLAG(Z_FLAG))
-#define SET_S  (N) (N ? SET_FLAG(S_FLAG)  : RESET_FLAG(S_FLAG))
+#define SET_C(N)  ((N) ? SET_FLAG(C_FLAG)  : RESET_FLAG(C_FLAG))
+#define SET_N(N)  ((N) ? SET_FLAG(N_FLAG)  : RESET_FLAG(N_FLAG))
+#define SET_PV(N) ((N) ? SET_FLAG(PV_FLAG) : RESET_FLAG(PV_FLAG))
+#define SET_H(N)  ((N) ? SET_FLAG(H_FLAG)  : RESET_FLAG(H_FLAG))
+#define SET_Z(N)  ((N) ? SET_FLAG(Z_FLAG)  : RESET_FLAG(Z_FLAG))
+#define SET_S(N)  ((N) ? SET_FLAG(S_FLAG)  : RESET_FLAG(S_FLAG))
+
+#define SET_CARRY(PRE, POST)       SET_C(carry(PRE, POST, 7))
+#define SET_BORROW(PRE, POST)      SET_C(borrow(PRE, POST, 7))
+#define SET_ADD                    SET_N(0)
+#define SET_SUBTRACT               SET_N(1)
+#define SET_PARITY(VALUE)          SET_PV(parity(VALUE))
+#define SET_OVERFLOW(PRE, POST)    SET_PV(carry(PRE, POST, 7))
+#define SET_UNDERFLOW(PRE, POST)   SET_PV(borrow(PRE, POST, 7))
+#define SET_HALF_CARRY(PRE, POST)  SET_H(carry(PRE, POST, 3))
+#define SET_HALF_BORROW(PRE, POST) SET_H(borrow(PRE, POST, 3))
+#define SET_ZERO(VALUE)            SET_Z(!VALUE)
+#define SET_SIGNED(VALUE)          SET_S(VALUE & (1 << 7))
 
 // perform one instruction cycle
 void step(struct CPUState *cpu, struct Memory *memory) {
@@ -181,6 +215,7 @@ void step(struct CPUState *cpu, struct Memory *memory) {
 	printf("\t@addr 0x%x: got opcode 0x%x\n\n", cpu->regs.pc, opcode);
 #endif
 
+	int pre, post, c;
 	// switch all the opcodes lol
 	switch(opcode) {
 		case 0x00: // nop
@@ -196,29 +231,45 @@ void step(struct CPUState *cpu, struct Memory *memory) {
 			cpu->regs.main.bc++;
 			break;
 		case 0x04: // inc b
-			// TODO: set flags
-			cpu->regs.main.b++;
+			pre = cpu->regs.main.b;
+			post = ++cpu->regs.main.b;
+			SET_ADD;
+			SET_OVERFLOW(pre, post);
+			SET_HALF_CARRY(pre, post);
+			SET_ZERO(post);
+			SET_SIGNED(post);
 			break;
 		case 0x05: // dec b
-			// TODO: set flags
-			cpu->regs.main.b--;
+			pre = cpu->regs.main.b;
+			post = --cpu->regs.main.b;
+			SET_SUBTRACT;
+			SET_UNDERFLOW(pre, post);
+			SET_HALF_BORROW(pre, post);
+			SET_ZERO(post);
+			SET_SIGNED(post);
 			break;
 		case 0x06: // ld b,*
 			cpu->regs.main.b = fetchByte(cpu, memory);
 			break;
 		case 0x07: // rlca
-			// TODO: set flags
-			cpu->regs.main.a
-				= cpu->regs.main.a << 1
-				| (cpu->regs.main.a & 1 << 7) >> 7;
+			c = (cpu->regs.main.a & (1 << 7)) >> 7;
+			cpu->regs.main.a <<= 1;
+			cpu->regs.main.a |= c;
+			SET_C(c);
+			SET_H(0);
+			SET_N(0);
 			break;
 		case 0x08: // ex af,af'
 			swapWord(&cpu->regs.main.af, &cpu->regs.alt.af);
 			break;
 		case 0x09: // add hl,bc
-			// TODO: set flags
 			sync(7);
+			pre = cpu->regs.main.h | cpu->regs.main.b;
 			cpu->regs.main.hl += cpu->regs.main.bc;
+			post = cpu->regs.main.h | cpu->regs.main.b;
+			SET_CARRY(pre, post);
+			SET_HALF_CARRY(pre, post);
+			SET_ADD;
 			break;
 		case 0x0a: // ld a,(bc)
 			cpu->regs.main.a = readByte(memory, cpu->regs.main.bc);
@@ -228,21 +279,33 @@ void step(struct CPUState *cpu, struct Memory *memory) {
 			cpu->regs.main.bc--;
 			break;
 		case 0x0c: // inc c
-			// TODO: set flags
-			cpu->regs.main.c++;
+			pre = cpu->regs.main.c;
+			post = ++cpu->regs.main.c;
+			SET_ADD;
+			SET_OVERFLOW(pre, post);
+			SET_HALF_CARRY(pre, post);
+			SET_ZERO(post);
+			SET_SIGNED(post);
 			break;
 		case 0x0d: // dec c
-			// TODO: set flags
-			cpu->regs.main.c--;
+			pre = cpu->regs.main.c;
+			post = --cpu->regs.main.c;
+			SET_SUBTRACT;
+			SET_UNDERFLOW(pre, post);
+			SET_HALF_BORROW(pre, post);
+			SET_ZERO(post);
+			SET_SIGNED(post);
 			break;
 		case 0x0e: // ld c,*
 			cpu->regs.main.c = fetchByte(cpu, memory);
 			break;
 		case 0x0f: // rrca
-			// TODO: set flags
-			cpu->regs.main.a
-				= cpu->regs.main.a >> 1
-				| (cpu->regs.main.a & 1) << 7;
+			c = cpu->regs.main.a & 1;
+			cpu->regs.main.a >>= 1;
+			cpu->regs.main.a |= c << 7;
+			SET_C(c);
+			SET_H(0);
+			SET_N(0);
 			break;
 	}
 }
