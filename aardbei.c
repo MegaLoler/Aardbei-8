@@ -2,6 +2,14 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+// TODO:
+// 	i/o
+// 	complete opcodes
+// 	mmap flash and eeprom
+// 	cli args parsing
+// 	cleaner debug output
+// 	gdb integration
+
 //#define DEBUG
 #define DEBUG_IO
 #define STRICT
