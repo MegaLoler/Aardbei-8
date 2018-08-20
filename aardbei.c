@@ -406,6 +406,12 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 		case 0x79: // ld a,c
 			cpu->regs.main.a = cpu->regs.main.c;
 			break;
+		case 0x7a: // ld a,d
+			cpu->regs.main.a = cpu->regs.main.d;
+			break;
+		case 0x7b: // ld a,e
+			cpu->regs.main.a = cpu->regs.main.e;
+			break;
 		case 0xb7: // or a
 			pre = cpu->regs.main.a;
 			post = pre | pre;
@@ -450,6 +456,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 					c = cpu->regs.main.d & 1;
 					cpu->regs.main.d >>= 1;
 					cpu->regs.main.d |= GET_C << 7;
+					post = cpu->regs.main.d;
 					SET_C(c);
 					SET_H(0);
 					SET_N(0);
@@ -461,6 +468,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 					c = cpu->regs.main.e & 1;
 					cpu->regs.main.e >>= 1;
 					cpu->regs.main.e |= GET_C << 7;
+					post = cpu->regs.main.e;
 					SET_C(c);
 					SET_H(0);
 					SET_N(0);
