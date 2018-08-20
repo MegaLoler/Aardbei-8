@@ -1,7 +1,3 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-
 // TODO:
 // 	i/o
 // 	complete opcodes
@@ -12,9 +8,24 @@
 // 	refresh register
 // 	gdb integration
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <ayemu.h>
+
 //#define DEBUG
 #define DEBUG_IO
 #define STRICT
+
+#define CPU_FREQ 3579545
+#define SYNC_CYCLES 8192
+#define SYNC_TIME (SYNC_CYCLES / CPU_FREQ)
+#define AUDIO_DEVICE "/dev/dsp/"
+#define AUDIO_RATE 44100
+#define AUDIO_CHANNELS 2
+#define AUDIO_DEPTH 16
+#define AUDIO_BUFFER_SIZE \
+	(AUDIO_RATE * AUDIO_CHANNELS * (AUDIO_DEPTH >> 3) * SYNC_TIME)
 
 /* CPU STATE AND REGISTERS */
 
@@ -107,51 +118,68 @@ uint8_t *addressDecode(struct Memory *memory, uint16_t addr) {
 
 /* IO */
 
-struct Peripherals {
-
+struct AY {
+	ayemu_ay_t ay;
+	uint8_t regs[14];
+	uint8_t buffer[AUDIO_BUFFER_SIZE];
 };
+
+struct Peripherals {
+	struct AY ay1;
+	struct AY ay2;
+};
+
+void playAySound(struct AY *ay) {
+	ayemu_set_regs(&ay->ay, ay->regs);
+	ayemu_gen_sound(&ay->ay, ay->buffer, AUDIO_BUFFER_SIZE);
+}
 
 /* CPU CONTROL */
 
 int CYCLES;
 
-// wait n T cycles
-void sync(int cycles) {
+// wait until the correct amount of time has passed
+// and buffer some ay audio and stuff
+void sync(int cycles, struct Peripherals *peripherals) {
+
+}
+
+// log n T cycles
+void cycles(int cycles) {
 	CYCLES += cycles;
-	// TODO: actually wait
 }
 
 void out(struct Peripherals *peripherals, uint16_t port, uint8_t data) {
-	sync(4);
-	// TODO
+	cycles(4);
 #ifdef DEBUG_IO
 	printf("\n[OUT] @0x%04x = 0x%02x", port, data);
 #endif
+	// TODO
 }
 
 uint8_t in(struct Peripherals *peripherals, uint16_t port) {
-	sync(4);
-	// TODO
+	cycles(4);
 #ifdef DEBUG_IO
 	printf("\n[IN] @0x%04x", port);
 #endif
+	// TODO
 	return 0;
 }
 
 void writeByte(struct Memory *memory, uint16_t addr, uint8_t data) {
-	sync(3);
+	cycles(3);
 	if(addr < RAM_BASE) // flash bank latch
 		memory->flashBank = data;
 	else *addressDecode(memory, addr) = data;
 }
 
 uint8_t readByte(struct Memory *memory, uint16_t addr) {
-	sync(3);
+	cycles(3);
 	return *addressDecode(memory, addr);
 }
 
 uint16_t readWord(struct Memory *memory, uint16_t addr) {
-	sync(6);
+	cycles(6);
 	return *addressDecode(memory, addr);
 }
 
@@ -166,7 +194,7 @@ uint16_t fetchWord(struct CPUState *cpu, struct Memory *memory) {
 }
 
 uint8_t fetchOpcode(struct CPUState *cpu, struct Memory *memory) {
-	sync(1);
+	cycles(1);
 	return fetchByte(cpu, memory);
 }
 
@@ -272,7 +300,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			writeByte(memory, cpu->regs.main.bc, cpu->regs.main.a);
 			break;
 		case 0x03: // inc bc
-			sync(2);
+			cycles(2);
 			cpu->regs.main.bc++;
 			break;
 		case 0x04: // inc b
@@ -308,7 +336,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			swapWord(&cpu->regs.main.af, &cpu->regs.alt.af);
 			break;
 		case 0x09: // add hl,bc
-			sync(7);
+			cycles(7);
 			pre = cpu->regs.main.h | cpu->regs.main.b;
 			cpu->regs.main.hl += cpu->regs.main.bc;
 			post = cpu->regs.main.h;
@@ -320,7 +348,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			cpu->regs.main.a = readByte(memory, cpu->regs.main.bc);
 			break;
 		case 0x0b: // dec bc
-			sync(2);
+			cycles(2);
 			cpu->regs.main.bc--;
 			break;
 		case 0x0c: // inc c
@@ -503,7 +531,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 					cpu->regs.ix = fetchWord(cpu, memory);
 					break;
 				case 0x23: // inc ix
-					sync(2);
+					cycles(2);
 					cpu->regs.ix++;
 					break;
 				case 0x7c: // ld a,ixh
@@ -513,7 +541,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 					cpu->regs.main.a = cpu->regs.ixl;
 					break;
 				case 0x7e: // ld a,(ix+*)
-					sync(5);
+					cycles(5);
 					cpu->regs.main.a = readByte(memory,
 							fetchByte(cpu, memory)
 							+ cpu->regs.ix);
@@ -540,7 +568,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			// switch the extended byte lol
 			switch(extendedByte) {
 				case 0x52: // sbc hl,de
-					sync(7);
+					cycles(7);
 					pre = cpu->regs.main.h;
 					cpu->regs.main.hl -= cpu->regs.main.de
 						+ GET_C;
@@ -592,32 +620,35 @@ int main(int argc, char *argv[]) {
 	load("test/music.bin", FLASH_SIZE, memory->flash);
 
 	while(1) {
+		while(SYNC_CYCLES) {
 #ifdef DEBUG
-		printf("\nT cycle %i:\n", CYCLES);
+			printf("\nT cycle %i:\n", CYCLES);
 #endif
-		step(cpu, memory, peripherals);
+			step(cpu, memory, peripherals);
 #ifdef DEBUG
-		printf("FLAGS: %i%i %i %i%i%i\n       SZ-H-PNC\n",
-				GET_S,
-				GET_Z,
-				GET_H,
-				GET_PV,
-				GET_N,
-				GET_C);
-		printf("REGS: AF(0x%04x) BC(0x%04x) DE(0x%04x) HL(0x%04x)\n",
-				cpu->regs.main.af,
-				cpu->regs.main.bc,
-				cpu->regs.main.de,
-				cpu->regs.main.hl);
-		printf("      IX(0x%04x) IY(0x%04x) SP(0x%04x) PC(0x%04x)\n",
-				cpu->regs.ix,
-				cpu->regs.iy,
-				cpu->regs.sp,
-				cpu->regs.pc);
-		printf("       I(0x%02x)    R(0x%02x)\n",
-				cpu->regs.i,
-				cpu->regs.r);
+			printf("FLAGS: %i%i %i %i%i%i\n       SZ-H-PNC\n",
+					GET_S,
+					GET_Z,
+					GET_H,
+					GET_PV,
+					GET_N,
+					GET_C);
+			printf("REGS: AF(0x%04x) BC(0x%04x) DE(0x%04x) HL(0x%04x)\n",
+					cpu->regs.main.af,
+					cpu->regs.main.bc,
+					cpu->regs.main.de,
+					cpu->regs.main.hl);
+			printf("      IX(0x%04x) IY(0x%04x) SP(0x%04x) PC(0x%04x)\n",
+					cpu->regs.ix,
+					cpu->regs.iy,
+					cpu->regs.sp,
+					cpu->regs.pc);
+			printf("       I(0x%02x)    R(0x%02x)\n",
+					cpu->regs.i,
+					cpu->regs.r);
 #endif
+		}
+		sync(SYNC_CYCLES, peripherals);
 	}
 	
 	return 0;
