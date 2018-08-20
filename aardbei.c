@@ -225,10 +225,10 @@ void unknownOpcode(int opcode) {
 }
 
 // perform one instruction cycle
-void step(struct CPUState *cpu, struct Memory *memory) {
+void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *peripherals) {
 	uint8_t opcode = fetchOpcode(cpu, memory);
 #ifdef DEBUG
-	printf("@addr 0x%x: got opcode 0x%x\n", cpu->regs.pc, opcode);
+	printf("@addr 0x%x: got opcode 0x%x\n", cpu->regs.pc-1, opcode);
 #endif
 
 	int pre, post, c, extendedByte;
@@ -323,6 +323,12 @@ void step(struct CPUState *cpu, struct Memory *memory) {
 			SET_H(0);
 			SET_N(0);
 			break;
+		case 0x3e: // ld a,*
+			cpu->regs.main.a = fetchByte(cpu, memory);
+			break;
+		case 0xd3: // out (*),a
+			out(peripherals, fetchByte(cpu, memory), cpu->regs.main.a);	
+			break;
 		case 0xdd: // ix extended
 			extendedByte = fetchOpcode(cpu, memory);
 #ifdef DEBUG
@@ -330,6 +336,15 @@ void step(struct CPUState *cpu, struct Memory *memory) {
 #endif
 			// switch the extended byte lol
 			switch(extendedByte) {
+				case 0x21: // ld ix,**
+					cpu->regs.ix = fetchWord(cpu, memory);
+					break;
+				case 0x7e: // ld a,(ix+*)
+					sync(5);
+					cpu->regs.main.a = readByte(memory,
+							fetchByte(cpu, memory)
+							+ cpu->regs.ix);
+					break;
 				default: unknownOpcode((opcode << 8) | extendedByte);
 			}
 			break;
@@ -350,6 +365,7 @@ int main(int argc, char *argv[]) {
 	CYCLES = 0;
 	struct CPUState *cpu = malloc(sizeof(struct CPUState));
 	struct Memory *memory = malloc(sizeof(struct Memory));
+	struct Peripherals *peripherals = malloc(sizeof(struct Peripherals));
 
 	// TODO: parse args to load different files than defaults
 	// TODO: mmap instead? ? ? 
@@ -359,7 +375,7 @@ int main(int argc, char *argv[]) {
 #ifdef DEBUG
 		printf("\nT cycle %i:\n", CYCLES);
 #endif
-		step(cpu, memory);
+		step(cpu, memory, peripherals);
 #ifdef DEBUG
 		printf("FLAGS: %i%i %i %i%i%i\n       SZ-H-PNC\n",
 				GET_S,
@@ -368,6 +384,19 @@ int main(int argc, char *argv[]) {
 				GET_PV,
 				GET_N,
 				GET_C);
+		printf("REGS: FA(0x%04x) CB(0x%04x) ED(0x%04x) LH(0x%04x)\n",
+				cpu->regs.main.af,
+				cpu->regs.main.bc,
+				cpu->regs.main.de,
+				cpu->regs.main.hl);
+		printf("      IX(0x%04x) IY(0x%04x) SP(0x%04x) PC(0x%04x)\n",
+				cpu->regs.ix,
+				cpu->regs.iy,
+				cpu->regs.sp,
+				cpu->regs.pc);
+		printf("       I(0x%02x)    R(0x%02x)\n",
+				cpu->regs.i,
+				cpu->regs.r);
 #endif
 	}
 	
