@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #define DEBUG
+#define STRICT
 
 /* CPU STATE AND REGISTERS */
 
@@ -64,9 +65,9 @@ struct CPUState {
 #define BANK_BASE   (1024*16)
 
 struct Memory {
-	uint8_t eeprom[EEPROM_SIZE]; // mmap this
+	uint8_t eeprom[EEPROM_SIZE]; // mmap this?
 	uint8_t ram[RAM_SIZE];
-	uint8_t flash[FLASH_SIZE]; // mmap this
+	uint8_t flash[FLASH_SIZE]; // mmap this?
 	uint8_t flashBank;
 };
 
@@ -216,6 +217,13 @@ int borrow(int pre, int post, int bit) {
 #define SET_ZERO(VALUE)            SET_Z(!VALUE)
 #define SET_SIGNED(VALUE)          SET_S(VALUE & (1 << 7))
 
+void unknownOpcode(int opcode) {
+	fprintf(stderr, "[WARNING] Unknown opcode: 0x%x\n", opcode);
+#ifdef STRICT
+	exit(1);
+#endif
+}
+
 // perform one instruction cycle
 void step(struct CPUState *cpu, struct Memory *memory) {
 	uint8_t opcode = fetchOpcode(cpu, memory);
@@ -223,7 +231,7 @@ void step(struct CPUState *cpu, struct Memory *memory) {
 	printf("@addr 0x%x: got opcode 0x%x\n", cpu->regs.pc, opcode);
 #endif
 
-	int pre, post, c;
+	int pre, post, c, extendedByte;
 	// switch all the opcodes lol
 	switch(opcode) {
 		case 0x00: // nop
@@ -315,18 +323,37 @@ void step(struct CPUState *cpu, struct Memory *memory) {
 			SET_H(0);
 			SET_N(0);
 			break;
-		default:
-			fprintf(stderr, "[WARNING] Unknown opcode: 0x%x\n", opcode);
+		case 0xdd: // ix extended
+			extendedByte = fetchOpcode(cpu, memory);
+#ifdef DEBUG
+			printf("\topcode extension 0x%x\n", extendedByte);
+#endif
+			// switch the extended byte lol
+			switch(extendedByte) {
+				default: unknownOpcode((opcode << 8) | extendedByte);
+			}
+			break;
+		default: unknownOpcode(opcode);
 	}
 }
 
 /* ENTRY POINT */
 
+// load a file into memory
+void load(const char filename[], int size, uint8_t *destination) {
+	FILE *fp = fopen(filename, "r");
+	fread(destination, sizeof(uint8_t), size, fp);
+	fclose(fp);
+}
+
 int main(int argc, char *argv[]) {
-	// TODO: mmap flash and eeprom
 	CYCLES = 0;
 	struct CPUState *cpu = malloc(sizeof(struct CPUState));
 	struct Memory *memory = malloc(sizeof(struct Memory));
+
+	// TODO: parse args to load different files than defaults
+	// TODO: mmap instead? ? ? 
+	load("test/music.bin", FLASH_SIZE, memory->flash);
 
 	while(1) {
 #ifdef DEBUG
