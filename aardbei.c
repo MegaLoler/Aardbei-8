@@ -5,9 +5,11 @@
 // TODO:
 // 	i/o
 // 	complete opcodes
+// 	clock sync/speed limit
 // 	mmap flash and eeprom
 // 	cli args parsing
 // 	cleaner debug output
+// 	refresh register
 // 	gdb integration
 
 //#define DEBUG
