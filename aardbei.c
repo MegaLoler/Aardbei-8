@@ -11,21 +11,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <sys/soundcard.h>
 #include <ayemu.h>
 
 //#define DEBUG
+//#define DEBUG_SYNC
 #define DEBUG_IO
 #define STRICT
 
 #define CPU_FREQ 3579545
-#define SYNC_CYCLES 8192
-#define SYNC_TIME (SYNC_CYCLES / CPU_FREQ)
-#define AUDIO_DEVICE "/dev/dsp/"
+#define SYNC_CYCLES 128
 #define AUDIO_RATE 44100
 #define AUDIO_CHANNELS 2
 #define AUDIO_DEPTH 16
-#define AUDIO_BUFFER_SIZE \
-	(AUDIO_RATE * AUDIO_CHANNELS * (AUDIO_DEPTH >> 3) * SYNC_TIME)
+#define AUDIO_BUFFER_SIZE (AUDIO_RATE * AUDIO_CHANNELS * (AUDIO_DEPTH >> 3))
+#define AUDIO_DEVICE "/dev/dsp/"
+
+
 
 /* CPU STATE AND REGISTERS */
 
@@ -87,6 +93,8 @@ struct CPUState {
 	struct Registers regs;
 };
 
+
+
 /* MEMORY */
 
 #define EEPROM_SIZE (1024*8)
@@ -116,11 +124,15 @@ uint8_t *addressDecode(struct Memory *memory, uint16_t addr) {
 		return &memory->eeprom[addr - EEPROM_BASE];
 }
 
+
+
 /* IO */
 
 struct AY {
 	ayemu_ay_t ay;
 	uint8_t regs[14];
+	uint8_t latch;
+	int audioDevice;
 	uint8_t buffer[AUDIO_BUFFER_SIZE];
 };
 
@@ -129,19 +141,30 @@ struct Peripherals {
 	struct AY ay2;
 };
 
-void playAySound(struct AY *ay) {
+void playAYSound(struct AY *ay, int samples) {
 	ayemu_set_regs(&ay->ay, ay->regs);
-	ayemu_gen_sound(&ay->ay, ay->buffer, AUDIO_BUFFER_SIZE);
+	ayemu_gen_sound(&ay->ay, ay->buffer, samples);
+	if(write(ay->audioDevice, ay->buffer, samples) == -1) {
+		fprintf(stderr, "Error writing to sound device\n");
+		exit(1);
+	}
 }
+
+
 
 /* CPU CONTROL */
 
 int CYCLES;
 
-// wait until the correct amount of time has passed
-// and buffer some ay audio and stuff
-void sync(int cycles, struct Peripherals *peripherals) {
-
+// buffer a certain number of T cycles
+void syncCycles(int cycles, struct Peripherals *peripherals) {
+#ifdef DEBUG_SYNC
+	printf("\n[SYNC] T cycle %i", CYCLES);
+#endif
+	int samples = cycles * AUDIO_BUFFER_SIZE / CPU_FREQ;
+	playAYSound(&peripherals->ay1, samples);
+	//playAYSound(&peripherals->ay2, samples);
+	// TODO: wait
 }
 
 // log n T cycles
@@ -154,7 +177,15 @@ void out(struct Peripherals *peripherals, uint16_t port, uint8_t data) {
 #ifdef DEBUG_IO
 	printf("\n[OUT] @0x%04x = 0x%02x", port, data);
 #endif
-	// TODO
+	if(port == 0)
+		peripherals->ay1.latch = data;
+	else if(port == 1)
+		peripherals->ay1.regs[peripherals->ay1.latch] = data;
+	else if(port == 2)
+		peripherals->ay2.latch = data;
+	else if(port == 3)
+		peripherals->ay2.regs[peripherals->ay1.latch] = data;
+	else fprintf(stderr, "Writing to undefined I/O port 0x%04x\n", port);
 }
 
 uint8_t in(struct Peripherals *peripherals, uint16_t port) {
@@ -600,7 +631,32 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 #endif
 }
 
+
+
 /* ENTRY POINT */
+
+int initSound()
+{
+	int audioDevice;
+	int freq = AUDIO_RATE;
+	int chans = AUDIO_CHANNELS;
+	int bits = AUDIO_DEPTH;
+	if((audioDevice = open(AUDIO_DEVICE, O_WRONLY, 0)) == -1) {
+		fprintf(stderr, "Can't open /dev/dsp\n");
+	}
+	else if(ioctl(audioDevice, SNDCTL_DSP_SETFMT, &bits) == -1) {
+		fprintf(stderr, "Can't set sound format\n");
+	}
+	else if(ioctl(audioDevice, SNDCTL_DSP_CHANNELS, &chans) == -1) {
+		fprintf(stderr, "Can't set number of channels\n");
+	}
+	else if(ioctl(audioDevice, SNDCTL_DSP_SPEED, &freq) == -1) {
+		fprintf(stderr, "Can't set audio freq\n");
+	}
+	else return audioDevice;
+	fprintf(stderr, "OSS initialization failed\n");
+	exit(1);
+}
 
 // load a file into memory
 void load(const char filename[], int size, uint8_t *destination) {
@@ -615,12 +671,21 @@ int main(int argc, char *argv[]) {
 	struct Memory *memory = malloc(sizeof(struct Memory));
 	struct Peripherals *peripherals = malloc(sizeof(struct Peripherals));
 
+	int audioDevice = initSound();
+	peripherals->ay1.audioDevice = peripherals->ay2.audioDevice = audioDevice;
+	memset(&peripherals->ay1.ay, 0, sizeof(ayemu_ay_t));
+	memset(&peripherals->ay2.ay, 0, sizeof(ayemu_ay_t));
+	ayemu_init(&peripherals->ay1.ay);
+	ayemu_init(&peripherals->ay2.ay);
+
 	// TODO: parse args to load different files than defaults
 	// TODO: mmap instead? ? ? 
 	load("test/music.bin", FLASH_SIZE, memory->flash);
 
+	int delta;
+	int lastCycle = CYCLES;
 	while(1) {
-		while(SYNC_CYCLES) {
+		while((delta = CYCLES-lastCycle) < SYNC_CYCLES) {
 #ifdef DEBUG
 			printf("\nT cycle %i:\n", CYCLES);
 #endif
@@ -648,8 +713,10 @@ int main(int argc, char *argv[]) {
 					cpu->regs.r);
 #endif
 		}
-		sync(SYNC_CYCLES, peripherals);
+		syncCycles(delta, peripherals);
+		lastCycle = CYCLES;
 	}
 	
+	close(audioDevice);
 	return 0;
 }
