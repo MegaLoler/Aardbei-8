@@ -2,7 +2,8 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#define DEBUG
+//#define DEBUG
+#define DEBUG_IO
 #define STRICT
 
 /* CPU STATE AND REGISTERS */
@@ -11,29 +12,29 @@ struct RegisterSet {
 	union {
 		uint16_t af;
 		struct {
-			uint8_t a;
 			uint8_t f;
+			uint8_t a;
 		};
 	};
 	union {
 		uint16_t bc;
 		struct {
-			uint8_t b;
 			uint8_t c;
+			uint8_t b;
 		};
 	};
 	union {
 		uint16_t de;
 		struct {
-			uint8_t d;
 			uint8_t e;
+			uint8_t d;
 		};
 	};
 	union {
 		uint16_t hl;
 		struct {
-			uint8_t h;
 			uint8_t l;
+			uint8_t h;
 		};
 	};
 };
@@ -43,8 +44,20 @@ struct Registers {
 	struct RegisterSet alt;
 	uint8_t i;
 	uint8_t r;
-	uint16_t ix;
-	uint16_t iy;
+	union {
+		uint16_t ix;
+		struct {
+			uint8_t ixl;
+			uint8_t ixh;
+		};
+	};
+	union {
+		uint16_t iy;
+		struct {
+			uint8_t iyl;
+			uint8_t iyh;
+		};
+	};
 	uint16_t sp;
 	uint16_t pc;
 };
@@ -101,11 +114,17 @@ void sync(int cycles) {
 void out(struct Peripherals *peripherals, uint16_t port, uint8_t data) {
 	sync(4);
 	// TODO
+#ifdef DEBUG_IO
+	printf("\n[OUT] @0x%04x = 0x%02x", port, data);
+#endif
 }
 
 uint8_t in(struct Peripherals *peripherals, uint16_t port) {
 	sync(4);
 	// TODO
+#ifdef DEBUG_IO
+	printf("\n[IN] @0x%04x", port);
+#endif
 	return 0;
 }
 
@@ -228,10 +247,10 @@ void unknownOpcode(int opcode) {
 void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *peripherals) {
 	uint8_t opcode = fetchOpcode(cpu, memory);
 #ifdef DEBUG
-	printf("@addr 0x%x: got opcode 0x%x\n", cpu->regs.pc-1, opcode);
+	printf("@addr 0x%04x: got opcode 0x%02x", cpu->regs.pc-1, opcode);
 #endif
 
-	int pre, post, c, extendedByte;
+	int pre, post, c, extendedByte, arg;
 	// switch all the opcodes lol
 	switch(opcode) {
 		case 0x00: // nop
@@ -282,7 +301,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			sync(7);
 			pre = cpu->regs.main.h | cpu->regs.main.b;
 			cpu->regs.main.hl += cpu->regs.main.bc;
-			post = cpu->regs.main.h | cpu->regs.main.b;
+			post = cpu->regs.main.h;
 			SET_CARRY(pre, post);
 			SET_HALF_CARRY(pre, post);
 			SET_ADD;
@@ -323,21 +342,157 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			SET_H(0);
 			SET_N(0);
 			break;
+		case 0x11: // ld de,**
+			cpu->regs.main.de = fetchWord(cpu, memory);
+			break;
+		case 0x17: // rla
+			c = (cpu->regs.main.a & (1 << 7)) >> 7;
+			cpu->regs.main.a <<= 1;
+			cpu->regs.main.a |= GET_C;
+			SET_C(c);
+			SET_H(0);
+			SET_N(0);
+			break;
+		case 0x1f: // rra
+			c = cpu->regs.main.a & 1;
+			cpu->regs.main.a >>= 1;
+			cpu->regs.main.a |= GET_C << 7;
+			SET_C(c);
+			SET_H(0);
+			SET_N(0);
+			break;
+		case 0x3c: // inc a
+			pre = cpu->regs.main.a;
+			post = ++cpu->regs.main.a;
+			SET_ADD;
+			SET_OVERFLOW(pre, post);
+			SET_HALF_CARRY(pre, post);
+			SET_ZERO(post);
+			SET_SIGNED(post);
+			break;
+		case 0x3d: // dec a
+			pre = cpu->regs.main.a;
+			post = --cpu->regs.main.a;
+			SET_SUBTRACT;
+			SET_UNDERFLOW(pre, post);
+			SET_HALF_BORROW(pre, post);
+			SET_ZERO(post);
+			SET_SIGNED(post);
+			break;
 		case 0x3e: // ld a,*
 			cpu->regs.main.a = fetchByte(cpu, memory);
+			break;
+		case 0x47: // ld b,a
+			cpu->regs.main.b = cpu->regs.main.a;
+			break;
+		case 0x4f: // ld c,a
+			cpu->regs.main.c = cpu->regs.main.a;
+			break;
+		case 0x60: // ld h,b
+			cpu->regs.main.h = cpu->regs.main.b;
+			break;
+		case 0x67: // ld h,a
+			cpu->regs.main.h = cpu->regs.main.a;
+			break;
+		case 0x69: // ld l,c
+			cpu->regs.main.l = cpu->regs.main.c;
+			break;
+		case 0x6f: // ld l,a
+			cpu->regs.main.l = cpu->regs.main.a;
+			break;
+		case 0x78: // ld a,b
+			cpu->regs.main.a = cpu->regs.main.b;
+			break;
+		case 0x79: // ld a,c
+			cpu->regs.main.a = cpu->regs.main.c;
+			break;
+		case 0xb7: // or a
+			pre = cpu->regs.main.a;
+			post = pre | pre;
+			cpu->regs.main.a = post;
+			SET_C(0);
+			SET_H(0);
+			SET_N(0);
+			SET_PARITY(post);
+			SET_ZERO(post);
+			SET_SIGNED(post);
+			break;
+		case 0xc2: // jp nz,**
+			arg = fetchWord(cpu, memory);
+			if(!GET_Z) cpu->regs.pc = arg;
+			break;
+		case 0xc3: // jp **
+			cpu->regs.pc = fetchWord(cpu, memory);
+			break;
+		case 0xc6: // add a,*
+			pre = cpu->regs.main.a;
+			cpu->regs.main.a += fetchByte(cpu, memory);
+			post = cpu->regs.main.a;
+			SET_CARRY(pre, post);
+			SET_HALF_CARRY(pre, post);
+			SET_ADD;
+			SET_OVERFLOW(pre, post);
+			SET_ZERO(post);
+			SET_SIGNED(post);
+			break;
+		case 0xca: // jp z,**
+			arg = fetchWord(cpu, memory);
+			if(!GET_Z) cpu->regs.pc = arg;
+			break;
+		case 0xcb: // bits
+			extendedByte = fetchOpcode(cpu, memory);
+#ifdef DEBUG
+			printf("%02x", extendedByte);
+#endif
+			// switch the extended byte lol
+			switch(extendedByte) {
+				case 0x1a: // rr d
+					c = cpu->regs.main.d & 1;
+					cpu->regs.main.d >>= 1;
+					cpu->regs.main.d |= GET_C << 7;
+					SET_C(c);
+					SET_H(0);
+					SET_N(0);
+					SET_PARITY(post);
+					SET_ZERO(post);
+					SET_SIGNED(post);
+					break;
+				case 0x1b: // rr e
+					c = cpu->regs.main.e & 1;
+					cpu->regs.main.e >>= 1;
+					cpu->regs.main.e |= GET_C << 7;
+					SET_C(c);
+					SET_H(0);
+					SET_N(0);
+					SET_PARITY(post);
+					SET_ZERO(post);
+					SET_SIGNED(post);
+					break;
+				default: unknownOpcode((opcode << 8) | extendedByte);
+			}
 			break;
 		case 0xd3: // out (*),a
 			out(peripherals, fetchByte(cpu, memory), cpu->regs.main.a);	
 			break;
-		case 0xdd: // ix extended
+		case 0xdd: // ix
 			extendedByte = fetchOpcode(cpu, memory);
 #ifdef DEBUG
-			printf("\topcode extension 0x%x\n", extendedByte);
+			printf("%02x", extendedByte);
 #endif
 			// switch the extended byte lol
 			switch(extendedByte) {
 				case 0x21: // ld ix,**
 					cpu->regs.ix = fetchWord(cpu, memory);
+					break;
+				case 0x23: // inc ix
+					sync(2);
+					cpu->regs.ix++;
+					break;
+				case 0x7c: // ld a,ixh
+					cpu->regs.main.a = cpu->regs.ixh;
+					break;
+				case 0x7d: // ld a,ixl
+					cpu->regs.main.a = cpu->regs.ixl;
 					break;
 				case 0x7e: // ld a,(ix+*)
 					sync(5);
@@ -348,8 +503,55 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 				default: unknownOpcode((opcode << 8) | extendedByte);
 			}
 			break;
+		case 0xe6: // and *
+			pre = cpu->regs.main.a;
+			post = pre & fetchByte(cpu, memory);
+			cpu->regs.main.a = post;
+			SET_C(0);
+			SET_H(1);
+			SET_N(0);
+			SET_PARITY(post);
+			SET_ZERO(post);
+			SET_SIGNED(post);
+			break;
+		case 0xed: // extd
+			extendedByte = fetchOpcode(cpu, memory);
+#ifdef DEBUG
+			printf("%02x", extendedByte);
+#endif
+			// switch the extended byte lol
+			switch(extendedByte) {
+				case 0x52: // sbc hl,de
+					sync(7);
+					pre = cpu->regs.main.h;
+					cpu->regs.main.hl -= cpu->regs.main.de
+						+ GET_C;
+					post = cpu->regs.main.h;
+					SET_BORROW(pre, post);
+					SET_HALF_BORROW(pre, post);
+					SET_SUBTRACT;
+					SET_UNDERFLOW(pre, post);
+					SET_ZERO(post);
+					SET_SIGNED(post);
+					break;
+				default: unknownOpcode((opcode << 8) | extendedByte);
+			}
+			break;
+		case 0xfe: // cp *
+			pre = cpu->regs.main.a;
+			post = pre - fetchByte(cpu, memory);
+			SET_BORROW(pre, post);
+			SET_HALF_BORROW(pre, post);
+			SET_SUBTRACT;
+			SET_UNDERFLOW(pre, post);
+			SET_ZERO(post);
+			SET_SIGNED(post);
+			break;
 		default: unknownOpcode(opcode);
 	}
+#ifdef DEBUG
+	printf("\n");
+#endif
 }
 
 /* ENTRY POINT */
@@ -384,7 +586,7 @@ int main(int argc, char *argv[]) {
 				GET_PV,
 				GET_N,
 				GET_C);
-		printf("REGS: FA(0x%04x) CB(0x%04x) ED(0x%04x) LH(0x%04x)\n",
+		printf("REGS: AF(0x%04x) BC(0x%04x) DE(0x%04x) HL(0x%04x)\n",
 				cpu->regs.main.af,
 				cpu->regs.main.bc,
 				cpu->regs.main.de,
