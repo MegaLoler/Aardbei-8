@@ -20,11 +20,12 @@
 
 //#define DEBUG
 //#define DEBUG_SYNC
-#define DEBUG_IO
+//#define DEBUG_IO
+#define DEBUG_AY
 #define STRICT
 
 #define CPU_FREQ 3579545
-#define SYNC_CYCLES 128
+#define SYNC_CYCLES 8192
 #define AUDIO_RATE 44100
 #define AUDIO_CHANNELS 2
 #define AUDIO_DEPTH 16
@@ -95,6 +96,7 @@ struct CPUState {
 
 
 
+
 /* MEMORY */
 
 #define EEPROM_SIZE (1024*8)
@@ -148,13 +150,84 @@ void playAYSound(struct AY *ay, int samples) {
 		fprintf(stderr, "Error writing to sound device\n");
 		exit(1);
 	}
+#ifdef DEBUG_AY
+	ayemu_ay_t *a = &ay->ay;
+	printf("\nAY REGS: A=%04d B=%04d C=%04d N=%02d R7=[%d%d%d%d%d%d] "
+			"\n   VOLS: A=%04d B=%04d C=%04d ENVFREQ=%d STYLE %d",
+			a->regs.tone_a, a->regs.tone_b, a->regs.tone_c, a->regs.noise,
+			a->regs.R7_tone_a, a->regs.R7_tone_b, a->regs.R7_tone_c,
+			a->regs.R7_noise_a, a->regs.R7_noise_b, a->regs.R7_noise_c,
+			a->regs.vol_a, a->regs.vol_b, a->regs.vol_c,
+			a->regs.env_freq, a->regs.env_style);
+#endif
 }
 
 
 
 /* CPU CONTROL */
 
+#define C_FLAG  (1)
+#define N_FLAG  (1 << 1)
+#define PV_FLAG (1 << 2)
+#define H_FLAG  (1 << 4)
+#define Z_FLAG  (1 << 6)
+#define S_FLAG  (1 << 7)
+
+#define GET_FLAG(F)   ((cpu->regs.main.f & F) != 0)
+#define SET_FLAG(F)   (cpu->regs.main.f |= F)
+#define RESET_FLAG(F) (cpu->regs.main.f &= ~F)
+
+#define GET_C  GET_FLAG(C_FLAG)
+#define GET_N  GET_FLAG(N_FLAG)
+#define GET_PV GET_FLAG(PV_FLAG)
+#define GET_H  GET_FLAG(H_FLAG)
+#define GET_Z  GET_FLAG(Z_FLAG)
+#define GET_S  GET_FLAG(S_FLAG)
+
+#define SET_C(N)  ((N) ? SET_FLAG(C_FLAG)  : RESET_FLAG(C_FLAG))
+#define SET_N(N)  ((N) ? SET_FLAG(N_FLAG)  : RESET_FLAG(N_FLAG))
+#define SET_PV(N) ((N) ? SET_FLAG(PV_FLAG) : RESET_FLAG(PV_FLAG))
+#define SET_H(N)  ((N) ? SET_FLAG(H_FLAG)  : RESET_FLAG(H_FLAG))
+#define SET_Z(N)  ((N) ? SET_FLAG(Z_FLAG)  : RESET_FLAG(Z_FLAG))
+#define SET_S(N)  ((N) ? SET_FLAG(S_FLAG)  : RESET_FLAG(S_FLAG))
+
+#define SET_CARRY(PRE, POST)       SET_C(carry(PRE, POST, 7))
+#define SET_BORROW(PRE, POST)      SET_C(borrow(PRE, POST, 7))
+#define SET_ADD                    SET_N(0)
+#define SET_SUBTRACT               SET_N(1)
+#define SET_PARITY(VALUE)          SET_PV(parity(VALUE))
+#define SET_OVERFLOW(PRE, POST)    SET_PV(carry(PRE, POST, 7))
+#define SET_UNDERFLOW(PRE, POST)   SET_PV(borrow(PRE, POST, 7))
+#define SET_HALF_CARRY(PRE, POST)  SET_H(carry(PRE, POST, 3))
+#define SET_HALF_BORROW(PRE, POST) SET_H(borrow(PRE, POST, 3))
+#define SET_ZERO(VALUE)            SET_Z(!VALUE)
+#define SET_SIGNED(VALUE)          SET_S(VALUE & (1 << 7))
+
 int CYCLES;
+
+// print the state of the cpu for debug or whatever
+void printState(struct CPUState *cpu) {
+	printf("FLAGS: %i%i %i %i%i%i\n       SZ-H-PNC\n",
+			GET_S,
+			GET_Z,
+			GET_H,
+			GET_PV,
+			GET_N,
+			GET_C);
+	printf("REGS: AF(0x%04x) BC(0x%04x) DE(0x%04x) HL(0x%04x)\n",
+			cpu->regs.main.af,
+			cpu->regs.main.bc,
+			cpu->regs.main.de,
+			cpu->regs.main.hl);
+	printf("      IX(0x%04x) IY(0x%04x) SP(0x%04x) PC(0x%04x)\n",
+			cpu->regs.ix,
+			cpu->regs.iy,
+			cpu->regs.sp,
+			cpu->regs.pc);
+	printf("       I(0x%02x)    R(0x%02x)\n",
+			cpu->regs.i,
+			cpu->regs.r);
+}
 
 // buffer a certain number of T cycles
 void syncCycles(int cycles, struct Peripherals *peripherals) {
@@ -164,7 +237,7 @@ void syncCycles(int cycles, struct Peripherals *peripherals) {
 	int samples = cycles * AUDIO_BUFFER_SIZE / CPU_FREQ;
 	playAYSound(&peripherals->ay1, samples);
 	//playAYSound(&peripherals->ay2, samples);
-	// TODO: wait
+	// TODO: restructure to do a sum of the two ay samples
 }
 
 // log n T cycles
@@ -184,7 +257,7 @@ void out(struct Peripherals *peripherals, uint16_t port, uint8_t data) {
 	else if(port == 2)
 		peripherals->ay2.latch = data;
 	else if(port == 3)
-		peripherals->ay2.regs[peripherals->ay1.latch] = data;
+		peripherals->ay2.regs[peripherals->ay2.latch] = data;
 	else fprintf(stderr, "Writing to undefined I/O port 0x%04x\n", port);
 }
 
@@ -267,43 +340,6 @@ int borrow(int pre, int post, int bit) {
 	int mask = 1 << bit;
 	return ~(pre & mask) & (post & mask);
 }
-
-#define C_FLAG  (1)
-#define N_FLAG  (1 << 1)
-#define PV_FLAG (1 << 2)
-#define H_FLAG  (1 << 4)
-#define Z_FLAG  (1 << 6)
-#define S_FLAG  (1 << 7)
-
-#define GET_FLAG(F)   ((cpu->regs.main.f & F) != 0)
-#define SET_FLAG(F)   (cpu->regs.main.f |= F)
-#define RESET_FLAG(F) (cpu->regs.main.f &= ~F)
-
-#define GET_C  GET_FLAG(C_FLAG)
-#define GET_N  GET_FLAG(N_FLAG)
-#define GET_PV GET_FLAG(PV_FLAG)
-#define GET_H  GET_FLAG(H_FLAG)
-#define GET_Z  GET_FLAG(Z_FLAG)
-#define GET_S  GET_FLAG(S_FLAG)
-
-#define SET_C(N)  ((N) ? SET_FLAG(C_FLAG)  : RESET_FLAG(C_FLAG))
-#define SET_N(N)  ((N) ? SET_FLAG(N_FLAG)  : RESET_FLAG(N_FLAG))
-#define SET_PV(N) ((N) ? SET_FLAG(PV_FLAG) : RESET_FLAG(PV_FLAG))
-#define SET_H(N)  ((N) ? SET_FLAG(H_FLAG)  : RESET_FLAG(H_FLAG))
-#define SET_Z(N)  ((N) ? SET_FLAG(Z_FLAG)  : RESET_FLAG(Z_FLAG))
-#define SET_S(N)  ((N) ? SET_FLAG(S_FLAG)  : RESET_FLAG(S_FLAG))
-
-#define SET_CARRY(PRE, POST)       SET_C(carry(PRE, POST, 7))
-#define SET_BORROW(PRE, POST)      SET_C(borrow(PRE, POST, 7))
-#define SET_ADD                    SET_N(0)
-#define SET_SUBTRACT               SET_N(1)
-#define SET_PARITY(VALUE)          SET_PV(parity(VALUE))
-#define SET_OVERFLOW(PRE, POST)    SET_PV(carry(PRE, POST, 7))
-#define SET_UNDERFLOW(PRE, POST)   SET_PV(borrow(PRE, POST, 7))
-#define SET_HALF_CARRY(PRE, POST)  SET_H(carry(PRE, POST, 3))
-#define SET_HALF_BORROW(PRE, POST) SET_H(borrow(PRE, POST, 3))
-#define SET_ZERO(VALUE)            SET_Z(!VALUE)
-#define SET_SIGNED(VALUE)          SET_S(VALUE & (1 << 7))
 
 void unknownOpcode(int opcode) {
 	fprintf(stderr, "[WARNING] Unknown opcode: 0x%x\n", opcode);
@@ -512,7 +548,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			break;
 		case 0xca: // jp z,**
 			arg = fetchWord(cpu, memory);
-			if(!GET_Z) cpu->regs.pc = arg;
+			if(GET_Z) cpu->regs.pc = arg;
 			break;
 		case 0xcb: // bits
 			extendedByte = fetchOpcode(cpu, memory);
@@ -614,6 +650,16 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 				default: unknownOpcode((opcode << 8) | extendedByte);
 			}
 			break;
+		case 0xf3: // di
+			// TODO: actually di
+			// right now this is just my debug opcode lol
+			printf("-----------\n\n");
+			break;
+		case 0xfb: // ei
+			// TODO: actually ei
+			// right now this is just my debug opcode lol
+			printState(cpu);
+			break;
 		case 0xfe: // cp *
 			pre = cpu->regs.main.a;
 			post = pre - fetchByte(cpu, memory);
@@ -680,7 +726,7 @@ int main(int argc, char *argv[]) {
 
 	// TODO: parse args to load different files than defaults
 	// TODO: mmap instead? ? ? 
-	load("test/music.bin", FLASH_SIZE, memory->flash);
+	load("test/music_.bin", FLASH_SIZE, memory->flash);
 
 	int delta;
 	int lastCycle = CYCLES;
@@ -691,26 +737,7 @@ int main(int argc, char *argv[]) {
 #endif
 			step(cpu, memory, peripherals);
 #ifdef DEBUG
-			printf("FLAGS: %i%i %i %i%i%i\n       SZ-H-PNC\n",
-					GET_S,
-					GET_Z,
-					GET_H,
-					GET_PV,
-					GET_N,
-					GET_C);
-			printf("REGS: AF(0x%04x) BC(0x%04x) DE(0x%04x) HL(0x%04x)\n",
-					cpu->regs.main.af,
-					cpu->regs.main.bc,
-					cpu->regs.main.de,
-					cpu->regs.main.hl);
-			printf("      IX(0x%04x) IY(0x%04x) SP(0x%04x) PC(0x%04x)\n",
-					cpu->regs.ix,
-					cpu->regs.iy,
-					cpu->regs.sp,
-					cpu->regs.pc);
-			printf("       I(0x%02x)    R(0x%02x)\n",
-					cpu->regs.i,
-					cpu->regs.r);
+			printState(cpu);
 #endif
 		}
 		syncCycles(delta, peripherals);
