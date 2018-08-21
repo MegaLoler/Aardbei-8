@@ -19,7 +19,7 @@
 #include <ayemu.h>
 
 //#define DEBUG
-#define DEBUG_SYNC
+//#define DEBUG_SYNC
 #define DEBUG_IO
 #define DEBUG_AY
 #define STRICT
@@ -134,7 +134,6 @@ struct AY {
 	ayemu_ay_t ay;
 	uint8_t regs[14];
 	uint8_t latch;
-	int audioDevice;
 	uint8_t buffer[AUDIO_BUFFER_SIZE];
 };
 
@@ -143,13 +142,9 @@ struct Peripherals {
 	struct AY ay2;
 };
 
-void playAYSound(struct AY *ay, int samples) {
+void genAYSound(struct AY *ay, int length) {
 	ayemu_set_regs(&ay->ay, ay->regs);
-	ayemu_gen_sound(&ay->ay, ay->buffer, samples);
-	if(write(ay->audioDevice, ay->buffer, samples) == -1) {
-		fprintf(stderr, "Error writing to sound device\n");
-		exit(1);
-	}
+	ayemu_gen_sound(&ay->ay, ay->buffer, length);
 #ifdef DEBUG_AY
 	ayemu_ay_t *a = &ay->ay;
 	printf("\nAY REGS: A=%04d B=%04d C=%04d N=%02d R7=[%d%d%d%d%d%d] "
@@ -204,6 +199,7 @@ void playAYSound(struct AY *ay, int samples) {
 #define SET_SIGNED(VALUE)          SET_S(VALUE & (1 << 7))
 
 int CYCLES;
+int audioDevice;
 
 // print the state of the cpu for debug or whatever
 void printState(struct CPUState *cpu) {
@@ -229,15 +225,30 @@ void printState(struct CPUState *cpu) {
 			cpu->regs.r);
 }
 
+
 // buffer a certain number of T cycles
 void syncCycles(long int cycles, struct Peripherals *peripherals) {
 #ifdef DEBUG_SYNC
 	printf("\n[SYNC] T cycle %i", CYCLES);
 #endif
-	int samples = cycles * AUDIO_BUFFER_SIZE / CPU_FREQ;
-	playAYSound(&peripherals->ay1, samples);
-	//playAYSound(&peripherals->ay2, samples);
-	// TODO: restructure to do a sum of the two ay samples
+
+	// audio processing
+	int length = cycles * AUDIO_BUFFER_SIZE / CPU_FREQ;
+	genAYSound(&peripherals->ay1, length);
+	genAYSound(&peripherals->ay2, length);
+	// mix the ay outputs and write to audio device
+	int i;
+	for(i = 0; i < length; i++) {
+		// i'm not sure about this
+		// what if its 16 bit samples, you kno?
+		peripherals->ay2.buffer[i] =
+			(peripherals->ay1.buffer[i] + peripherals->ay2.buffer[i])
+			/ 2;
+	}
+	if(write(audioDevice, &peripherals->ay2.buffer, length) == -1) {
+		fprintf(stderr, "Error writing to sound device\n");
+		exit(1);
+	}
 }
 
 // log n T cycles
@@ -717,8 +728,7 @@ int main(int argc, char *argv[]) {
 	struct Memory *memory = malloc(sizeof(struct Memory));
 	struct Peripherals *peripherals = malloc(sizeof(struct Peripherals));
 
-	int audioDevice = initSound();
-	peripherals->ay1.audioDevice = peripherals->ay2.audioDevice = audioDevice;
+	audioDevice = initSound();
 	memset(&peripherals->ay1.ay, 0, sizeof(ayemu_ay_t));
 	memset(&peripherals->ay2.ay, 0, sizeof(ayemu_ay_t));
 	ayemu_init(&peripherals->ay1.ay);
@@ -726,7 +736,7 @@ int main(int argc, char *argv[]) {
 
 	// TODO: parse args to load different files than defaults
 	// TODO: mmap instead? ? ? 
-	load("test/music_.bin", FLASH_SIZE, memory->flash);
+	load("test/music.rom", FLASH_SIZE, memory->flash);
 
 	int delta;
 	int lastCycle = CYCLES;
