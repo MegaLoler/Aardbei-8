@@ -1,7 +1,7 @@
 // TODO:
-// 	i/o
 // 	complete opcodes
-// 	clock sync/speed limit
+//	v9958 emulation
+//	full uart emulation
 // 	mmap flash and eeprom
 // 	cli args parsing
 // 	cleaner debug output
@@ -20,8 +20,8 @@
 
 //#define DEBUG
 //#define DEBUG_SYNC
-#define DEBUG_IO
-#define DEBUG_AY
+//#define DEBUG_IO
+//#define DEBUG_AY
 #define STRICT
 
 #define CPU_FREQ 3579545
@@ -249,6 +249,9 @@ void syncCycles(long int cycles, struct Peripherals *peripherals) {
 		fprintf(stderr, "Error writing to sound device\n");
 		exit(1);
 	}
+
+	// flush the uart
+	fflush(stdout);
 }
 
 // log n T cycles
@@ -261,14 +264,19 @@ void out(struct Peripherals *peripherals, uint16_t port, uint8_t data) {
 #ifdef DEBUG_IO
 	printf("\n[OUT] @0x%04x = 0x%02x", port, data);
 #endif
+	// ay 1
 	if(port == 0)
 		peripherals->ay1.latch = data;
 	else if(port == 1)
 		peripherals->ay1.regs[peripherals->ay1.latch] = data;
+	// ay 2
 	else if(port == 2)
 		peripherals->ay2.latch = data;
 	else if(port == 3)
 		peripherals->ay2.regs[peripherals->ay2.latch] = data;
+	// uart
+	else if(port == 8)
+		putchar(data);
 	else fprintf(stderr, "Writing to undefined I/O port 0x%04x\n", port);
 }
 
