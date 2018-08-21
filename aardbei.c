@@ -19,13 +19,13 @@
 #include <ayemu.h>
 
 //#define DEBUG
-//#define DEBUG_SYNC
-//#define DEBUG_IO
+#define DEBUG_SYNC
+#define DEBUG_IO
 #define DEBUG_AY
 #define STRICT
 
 #define CPU_FREQ 3579545
-#define SYNC_CYCLES 8192
+#define SYNC_CYCLES 8192 // lower = more accurate, higher = more performance
 #define AUDIO_RATE 44100
 #define AUDIO_CHANNELS 2
 #define AUDIO_DEPTH 16
@@ -230,7 +230,7 @@ void printState(struct CPUState *cpu) {
 }
 
 // buffer a certain number of T cycles
-void syncCycles(int cycles, struct Peripherals *peripherals) {
+void syncCycles(long int cycles, struct Peripherals *peripherals) {
 #ifdef DEBUG_SYNC
 	printf("\n[SYNC] T cycle %i", CYCLES);
 #endif
