@@ -10,8 +10,6 @@ struct VDC {
 	SDL_Surface *surface;
 };
 
-void initVideo();
-void freeVideo();
 void initVDC(struct VDC *);
 void freeVDC(struct VDC *);
 void draw(struct VDC *);

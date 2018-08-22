@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/soundcard.h>
+#include <SDL2/SDL.h>
 #include <ayemu.h>
 #include "v9958.h"
 
@@ -162,6 +163,33 @@ void genAYSound(struct AY *ay, int length) {
 
 
 
+/* SYSTEM */
+
+struct System {
+	struct CPUState cpu;
+	struct Memory memory;
+	struct Peripherals peripherals;
+	int cycles;
+	int running;
+};
+
+struct System *newSystem() {
+	struct System *system = malloc(sizeof(struct System));
+	system->cycles = 0;
+	system->running = 1;
+	ayemu_init(&system->peripherals.ay1.ay);
+	ayemu_init(&system->peripherals.ay2.ay);
+	initVDC(&system->peripherals.vdc);
+	return system;
+}
+
+void destroySystem(struct System *system) {
+	freeVDC(&system->peripherals.vdc);
+	free(system);
+}
+
+
+
 /* CPU CONTROL */
 
 #define C_FLAG  (1)
@@ -201,10 +229,6 @@ void genAYSound(struct AY *ay, int length) {
 #define SET_ZERO(VALUE)            SET_Z(!VALUE)
 #define SET_SIGNED(VALUE)          SET_S(VALUE & (1 << 7))
 
-int CYCLES;
-int audioDevice;
-int running;
-
 // print the state of the cpu for debug or whatever
 void printState(struct CPUState *cpu) {
 	printf("FLAGS: %i%i %i %i%i%i\n       SZ-H-PNC\n",
@@ -229,19 +253,20 @@ void printState(struct CPUState *cpu) {
 			cpu->regs.r);
 }
 
-void poll(struct VDC *vdc) {
+void poll(struct System *system) {
 	SDL_Event e;
 	while(SDL_PollEvent(&e) != 0) {
 		switch(e.type) {
 			case SDL_QUIT:
-				running = 0;
+				system->running = 0;
 				break;
 		}
 	}
 }
 
 // buffer a certain number of T cycles
-void syncCycles(long int cycles, struct Peripherals *peripherals) {
+void syncCycles(struct System *system, long int cycles) {
+	struct Peripherals *peripherals = &system->peripherals;
 #ifdef DEBUG_SYNC
 	printf("\n[SYNC] T cycle %i", CYCLES);
 #endif
@@ -259,25 +284,26 @@ void syncCycles(long int cycles, struct Peripherals *peripherals) {
 			(peripherals->ay1.buffer[i] + peripherals->ay2.buffer[i])
 			/ 2;
 	}
-	if(write(audioDevice, &peripherals->ay2.buffer, length) == -1) {
+/*	if(write(audioDevice, &peripherals->ay2.buffer, length) == -1) {
 		fprintf(stderr, "Error writing to sound device\n");
 		exit(1);
-	}
+	}*/
 
 	// poll for sdl events
-	poll(&peripherals->vdc);
+	//poll(system);
 
 	// flush the uart
 	fflush(stdout);
 }
 
 // log n T cycles
-void cycles(int cycles) {
-	CYCLES += cycles;
+void cycles(int cycles, struct System *system) {
+	system->cycles += cycles;
 }
 
-void out(struct Peripherals *peripherals, uint16_t port, uint8_t data) {
-	cycles(4);
+void out(struct System *system, uint16_t port, uint8_t data) {
+	struct Peripherals *peripherals = &system->peripherals;
+	cycles(4, system);
 #ifdef DEBUG_IO
 	printf("\n[OUT] @0x%04x = 0x%02x", port, data);
 #endif
@@ -300,8 +326,9 @@ void out(struct Peripherals *peripherals, uint16_t port, uint8_t data) {
 	else fprintf(stderr, "Writing to undefined I/O port 0x%04x\n", port);
 }
 
-uint8_t in(struct Peripherals *peripherals, uint16_t port) {
-	cycles(4);
+uint8_t in(struct System *system, uint16_t port) {
+	struct Peripherals *peripherals = &system->peripherals;
+	cycles(4, system);
 #ifdef DEBUG_IO
 	printf("\n[IN] @0x%04x", port);
 #endif
@@ -325,36 +352,36 @@ uint8_t in(struct Peripherals *peripherals, uint16_t port) {
 	return 0;
 }
 
-void writeByte(struct Memory *memory, uint16_t addr, uint8_t data) {
-	cycles(3);
+void writeByte(struct System *system, uint16_t addr, uint8_t data) {
+	cycles(3, system);
 	if(addr < RAM_BASE) // flash bank latch
-		memory->flashBank = data;
-	else *addressDecode(memory, addr) = data;
+		system->memory.flashBank = data;
+	else *addressDecode(&system->memory, addr) = data;
 }
 
-uint8_t readByte(struct Memory *memory, uint16_t addr) {
-	cycles(3);
-	return *addressDecode(memory, addr);
+uint8_t readByte(struct System *system, uint16_t addr) {
+	cycles(3, system);
+	return *addressDecode(&system->memory, addr);
 }
 
-uint16_t readWord(struct Memory *memory, uint16_t addr) {
-	cycles(6);
-	return *addressDecode(memory, addr);
+uint16_t readWord(struct System *system, uint16_t addr) {
+	cycles(6, system);
+	return *addressDecode(&system->memory, addr);
 }
 
-uint8_t fetchByte(struct CPUState *cpu, struct Memory *memory) {
-	return readByte(memory, cpu->regs.pc++);
+uint8_t fetchByte(struct System *system) {
+	return readByte(system, system->cpu.regs.pc++);
 }
 
-uint16_t fetchWord(struct CPUState *cpu, struct Memory *memory) {
-	uint8_t low = fetchByte(cpu, memory);
-	uint8_t high = fetchByte(cpu, memory);
+uint16_t fetchWord(struct System *system) {
+	uint8_t low = fetchByte(system);
+	uint8_t high = fetchByte(system);
 	return low + (high << 8);
 }
 
-uint8_t fetchOpcode(struct CPUState *cpu, struct Memory *memory) {
-	cycles(1);
-	return fetchByte(cpu, memory);
+uint8_t fetchOpcode(struct System *system) {
+	cycles(1, system);
+	return fetchByte(system);
 }
 
 void swapByte(uint8_t *a, uint8_t *b) {
@@ -404,8 +431,9 @@ void unknownOpcode(int opcode) {
 }
 
 // perform one instruction cycle
-void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *peripherals) {
-	uint8_t opcode = fetchOpcode(cpu, memory);
+void step(struct System *system) {
+	struct CPUState *cpu = &system->cpu;
+	uint8_t opcode = fetchOpcode(system);
 #ifdef DEBUG
 	printf("@addr 0x%04x: got opcode 0x%02x", cpu->regs.pc-1, opcode);
 #endif
@@ -416,13 +444,13 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 		case 0x00: // nop
 			break;
 		case 0x01: // ld bc,**
-			cpu->regs.main.bc = fetchWord(cpu, memory);
+			cpu->regs.main.bc = fetchWord(system);
 			break;
 		case 0x02: // ld (bc),a
-			writeByte(memory, cpu->regs.main.bc, cpu->regs.main.a);
+			writeByte(system, cpu->regs.main.bc, cpu->regs.main.a);
 			break;
 		case 0x03: // inc bc
-			cycles(2);
+			cycles(2, system);
 			cpu->regs.main.bc++;
 			break;
 		case 0x04: // inc b
@@ -444,7 +472,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			SET_SIGNED(post);
 			break;
 		case 0x06: // ld b,*
-			cpu->regs.main.b = fetchByte(cpu, memory);
+			cpu->regs.main.b = fetchByte(system);
 			break;
 		case 0x07: // rlca
 			c = (cpu->regs.main.a & (1 << 7)) >> 7;
@@ -458,7 +486,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			swapWord(&cpu->regs.main.af, &cpu->regs.alt.af);
 			break;
 		case 0x09: // add hl,bc
-			cycles(7);
+			cycles(7, system);
 			pre = cpu->regs.main.h | cpu->regs.main.b;
 			cpu->regs.main.hl += cpu->regs.main.bc;
 			post = cpu->regs.main.h;
@@ -467,10 +495,10 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			SET_ADD;
 			break;
 		case 0x0a: // ld a,(bc)
-			cpu->regs.main.a = readByte(memory, cpu->regs.main.bc);
+			cpu->regs.main.a = readByte(system, cpu->regs.main.bc);
 			break;
 		case 0x0b: // dec bc
-			cycles(2);
+			cycles(2, system);
 			cpu->regs.main.bc--;
 			break;
 		case 0x0c: // inc c
@@ -492,7 +520,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			SET_SIGNED(post);
 			break;
 		case 0x0e: // ld c,*
-			cpu->regs.main.c = fetchByte(cpu, memory);
+			cpu->regs.main.c = fetchByte(system);
 			break;
 		case 0x0f: // rrca
 			c = cpu->regs.main.a & 1;
@@ -503,7 +531,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			SET_N(0);
 			break;
 		case 0x11: // ld de,**
-			cpu->regs.main.de = fetchWord(cpu, memory);
+			cpu->regs.main.de = fetchWord(system);
 			break;
 		case 0x17: // rla
 			c = (cpu->regs.main.a & (1 << 7)) >> 7;
@@ -540,7 +568,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			SET_SIGNED(post);
 			break;
 		case 0x3e: // ld a,*
-			cpu->regs.main.a = fetchByte(cpu, memory);
+			cpu->regs.main.a = fetchByte(system);
 			break;
 		case 0x47: // ld b,a
 			cpu->regs.main.b = cpu->regs.main.a;
@@ -584,15 +612,15 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			SET_SIGNED(post);
 			break;
 		case 0xc2: // jp nz,**
-			arg = fetchWord(cpu, memory);
+			arg = fetchWord(system);
 			if(!GET_Z) cpu->regs.pc = arg;
 			break;
 		case 0xc3: // jp **
-			cpu->regs.pc = fetchWord(cpu, memory);
+			cpu->regs.pc = fetchWord(system);
 			break;
 		case 0xc6: // add a,*
 			pre = cpu->regs.main.a;
-			cpu->regs.main.a += fetchByte(cpu, memory);
+			cpu->regs.main.a += fetchByte(system);
 			post = cpu->regs.main.a;
 			SET_CARRY(pre, post);
 			SET_HALF_CARRY(pre, post);
@@ -602,11 +630,11 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			SET_SIGNED(post);
 			break;
 		case 0xca: // jp z,**
-			arg = fetchWord(cpu, memory);
+			arg = fetchWord(system);
 			if(GET_Z) cpu->regs.pc = arg;
 			break;
 		case 0xcb: // bits
-			extendedByte = fetchOpcode(cpu, memory);
+			extendedByte = fetchOpcode(system);
 #ifdef DEBUG
 			printf("%02x", extendedByte);
 #endif
@@ -640,20 +668,20 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			}
 			break;
 		case 0xd3: // out (*),a
-			out(peripherals, fetchByte(cpu, memory), cpu->regs.main.a);	
+			out(system, fetchByte(system), cpu->regs.main.a);	
 			break;
 		case 0xdd: // ix
-			extendedByte = fetchOpcode(cpu, memory);
+			extendedByte = fetchOpcode(system);
 #ifdef DEBUG
 			printf("%02x", extendedByte);
 #endif
 			// switch the extended byte lol
 			switch(extendedByte) {
 				case 0x21: // ld ix,**
-					cpu->regs.ix = fetchWord(cpu, memory);
+					cpu->regs.ix = fetchWord(system);
 					break;
 				case 0x23: // inc ix
-					cycles(2);
+					cycles(2, system);
 					cpu->regs.ix++;
 					break;
 				case 0x7c: // ld a,ixh
@@ -663,9 +691,9 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 					cpu->regs.main.a = cpu->regs.ixl;
 					break;
 				case 0x7e: // ld a,(ix+*)
-					cycles(5);
-					cpu->regs.main.a = readByte(memory,
-							fetchByte(cpu, memory)
+					cycles(5, system);
+					cpu->regs.main.a = readByte(system,
+							fetchByte(system)
 							+ cpu->regs.ix);
 					break;
 				default: unknownOpcode((opcode << 8) | extendedByte);
@@ -673,7 +701,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			break;
 		case 0xe6: // and *
 			pre = cpu->regs.main.a;
-			post = pre & fetchByte(cpu, memory);
+			post = pre & fetchByte(system);
 			cpu->regs.main.a = post;
 			SET_C(0);
 			SET_H(1);
@@ -683,14 +711,14 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			SET_SIGNED(post);
 			break;
 		case 0xed: // extd
-			extendedByte = fetchOpcode(cpu, memory);
+			extendedByte = fetchOpcode(system);
 #ifdef DEBUG
 			printf("%02x", extendedByte);
 #endif
 			// switch the extended byte lol
 			switch(extendedByte) {
 				case 0x52: // sbc hl,de
-					cycles(7);
+					cycles(7, system);
 					pre = cpu->regs.main.h;
 					cpu->regs.main.hl -= cpu->regs.main.de
 						+ GET_C;
@@ -717,7 +745,7 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 			break;
 		case 0xfe: // cp *
 			pre = cpu->regs.main.a;
-			post = pre - fetchByte(cpu, memory);
+			post = pre - fetchByte(system);
 			SET_BORROW(pre, post);
 			SET_HALF_BORROW(pre, post);
 			SET_SUBTRACT;
@@ -736,27 +764,13 @@ void step(struct CPUState *cpu, struct Memory *memory, struct Peripherals *perip
 
 /* ENTRY POINT */
 
-int initSound()
-{
-	int audioDevice;
-	int freq = AUDIO_RATE;
-	int chans = AUDIO_CHANNELS;
-	int bits = AUDIO_DEPTH;
-	if((audioDevice = open(AUDIO_DEVICE, O_WRONLY, 0)) == -1) {
-		fprintf(stderr, "Can't open /dev/dsp\n");
+struct System *mainSystem;
+
+void initSDL() {
+	if(SDL_Init(SDL_INIT_VIDEO) < 0) {
+		fprintf(stderr, "Could not initialize SDL: %s\n", SDL_GetError());
+		exit(1);
 	}
-	else if(ioctl(audioDevice, SNDCTL_DSP_SETFMT, &bits) == -1) {
-		fprintf(stderr, "Can't set sound format\n");
-	}
-	else if(ioctl(audioDevice, SNDCTL_DSP_CHANNELS, &chans) == -1) {
-		fprintf(stderr, "Can't set number of channels\n");
-	}
-	else if(ioctl(audioDevice, SNDCTL_DSP_SPEED, &freq) == -1) {
-		fprintf(stderr, "Can't set audio freq\n");
-	}
-	else return audioDevice;
-	fprintf(stderr, "OSS initialization failed\n");
-	exit(1);
 }
 
 // load a file into memory
@@ -766,40 +780,40 @@ void load(const char filename[], int size, uint8_t *destination) {
 	fclose(fp);
 }
 
-int main(int argc, char *argv[]) {
-	CYCLES = 0;
-	struct CPUState *cpu = malloc(sizeof(struct CPUState));
-	struct Memory *memory = malloc(sizeof(struct Memory));
-	struct Peripherals *peripherals = malloc(sizeof(struct Peripherals));
+void init() {
+	initSDL();
+	mainSystem = newSystem();
 
-	audioDevice = initSound();
-	initVideo();
-	ayemu_init(&peripherals->ay1.ay);
-	ayemu_init(&peripherals->ay2.ay);
-	initVDC(&peripherals->vdc);
-
+	// load the program and save data
 	// TODO: parse args to load different files than defaults
 	// TODO: mmap instead? ? ? 
-	load("test/music.rom", FLASH_SIZE, memory->flash);
+	load("test/music.rom", FLASH_SIZE, mainSystem->memory.flash);
+}
+
+void quit() {
+	destroySystem(mainSystem);
+	SDL_Quit();
+}
+
+int main(int argc, char *argv[]) {
+	init();
 
 	int delta;
-	int lastCycle = CYCLES;
-	while(running) {
-		while((delta = CYCLES-lastCycle) < SYNC_CYCLES) {
+	int lastCycle = mainSystem->cycles;
+	while(mainSystem->running) {
+		while((delta = mainSystem->cycles-lastCycle) < SYNC_CYCLES) {
 #ifdef DEBUG
-			printf("\nT cycle %i:\n", CYCLES);
+			printf("\nT cycle %i:\n", mainSystem->cycles);
 #endif
-			step(cpu, memory, peripherals);
+			step(mainSystem);
 #ifdef DEBUG
 			printState(cpu);
 #endif
 		}
-		syncCycles(delta, peripherals);
-		lastCycle = CYCLES;
+		syncCycles(mainSystem, delta);
+		lastCycle = mainSystem->cycles;
 	}
 	
-	close(audioDevice);
-	freeVDC(&peripherals->vdc);
-	freeVideo();
+	quit();
 	return 0;
 }

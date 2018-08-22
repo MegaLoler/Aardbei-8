@@ -3,32 +3,21 @@
 #include <SDL2/SDL.h>
 #include "v9958.h"
 
-void initVideo() {
-	if(SDL_Init(SDL_INIT_VIDEO) < 0) {
-		fprintf(stderr, "Could not initialize SDL: %s\n", SDL_GetError());
-		exit(1);
-	}
-}
-
-void freeVideo() {
-	SDL_Quit();
-}
-
 void initVDC(struct VDC *vdc) {
-	vdc->window = SDL_CreateWindow("v9958", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 0, 0, SDL_WINDOW_SHOWN);
+/*	vdc->window = SDL_CreateWindow("v9958", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 0, 0, SDL_WINDOW_SHOWN);
 	if(vdc->window == NULL) {
 		fprintf(stderr, "SDL window could not be created: %s\n", SDL_GetError());
 		exit(1);
 	}
-	vdc->surface = SDL_GetWindowSurface(vdc->window);
+	vdc->surface = SDL_GetWindowSurface(vdc->window);*/
 }
 
 void freeVDC(struct VDC *vdc) {
-	SDL_DestroyWindow(vdc->window);
+//	SDL_DestroyWindow(vdc->window);
 }
 
 void draw(struct VDC *vdc) {
-	SDL_UpdateWindowSurface(vdc->window);
+//	SDL_UpdateWindowSurface(vdc->window);
 }
 
 void vdcWrite(struct VDC *vdc, uint8_t port, uint8_t data) {
