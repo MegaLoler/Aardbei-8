@@ -17,6 +17,7 @@
 #include <sys/ioctl.h>
 #include <sys/soundcard.h>
 #include <ayemu.h>
+#include "v9958.h"
 
 //#define DEBUG
 //#define DEBUG_SYNC
@@ -140,6 +141,7 @@ struct AY {
 struct Peripherals {
 	struct AY ay1;
 	struct AY ay2;
+	struct VDC vdc;
 };
 
 void genAYSound(struct AY *ay, int length) {
@@ -274,6 +276,9 @@ void out(struct Peripherals *peripherals, uint16_t port, uint8_t data) {
 		peripherals->ay2.latch = data;
 	else if(port == 3)
 		peripherals->ay2.regs[peripherals->ay2.latch] = data;
+	// vdc
+	else if(port >= 4 && port < 8)
+		vdcWrite(&peripherals->vdc, port-4, data);
 	// uart
 	else if(port == 8)
 		putchar(data);
@@ -285,7 +290,23 @@ uint8_t in(struct Peripherals *peripherals, uint16_t port) {
 #ifdef DEBUG_IO
 	printf("\n[IN] @0x%04x", port);
 #endif
-	// TODO
+	// ay 1
+	if(port == 0)
+		fprintf(stderr, "Reading from read-only I/O port 0x%04x\n", port);
+	else if(port == 1)
+		return peripherals->ay1.regs[peripherals->ay1.latch];
+	// ay 2
+	else if(port == 2)
+		fprintf(stderr, "Reading from read-only I/O port 0x%04x\n", port);
+	else if(port == 3)
+		return peripherals->ay2.regs[peripherals->ay2.latch];
+	// vdc
+	else if(port >= 4 && port < 8)
+		return vdcRead(&peripherals->vdc, port-4);
+	// uart
+	else if(port == 8)
+		fprintf(stderr, "Reading from read-only I/O port 0x%04x\n", port);
+	else fprintf(stderr, "Reading from undefined I/O port 0x%04x\n", port);
 	return 0;
 }
 
@@ -737,10 +758,10 @@ int main(int argc, char *argv[]) {
 	struct Peripherals *peripherals = malloc(sizeof(struct Peripherals));
 
 	audioDevice = initSound();
-	memset(&peripherals->ay1.ay, 0, sizeof(ayemu_ay_t));
-	memset(&peripherals->ay2.ay, 0, sizeof(ayemu_ay_t));
+	initVideo();
 	ayemu_init(&peripherals->ay1.ay);
 	ayemu_init(&peripherals->ay2.ay);
+	initVDC(&peripherals->vdc);
 
 	// TODO: parse args to load different files than defaults
 	// TODO: mmap instead? ? ? 
