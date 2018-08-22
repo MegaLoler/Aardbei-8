@@ -1,5 +1,5 @@
 aardbei: *.c
-	gcc -Wall -layemu -o aardbei *.c
+	gcc -Wall -layemu -lSDL2 -o aardbei *.c
 
 run: aardbei
 	aoss ./aardbei

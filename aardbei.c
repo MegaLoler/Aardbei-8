@@ -2,6 +2,7 @@
 // 	complete opcodes
 //	v9958 emulation
 //	full uart emulation
+//	use sdl for audio instead of oss
 // 	mmap flash and eeprom
 // 	cli args parsing
 // 	cleaner debug output
@@ -202,6 +203,7 @@ void genAYSound(struct AY *ay, int length) {
 
 int CYCLES;
 int audioDevice;
+int running;
 
 // print the state of the cpu for debug or whatever
 void printState(struct CPUState *cpu) {
@@ -227,6 +229,16 @@ void printState(struct CPUState *cpu) {
 			cpu->regs.r);
 }
 
+void poll(struct VDC *vdc) {
+	SDL_Event e;
+	while(SDL_PollEvent(&e) != 0) {
+		switch(e.type) {
+			case SDL_QUIT:
+				running = 0;
+				break;
+		}
+	}
+}
 
 // buffer a certain number of T cycles
 void syncCycles(long int cycles, struct Peripherals *peripherals) {
@@ -251,6 +263,9 @@ void syncCycles(long int cycles, struct Peripherals *peripherals) {
 		fprintf(stderr, "Error writing to sound device\n");
 		exit(1);
 	}
+
+	// poll for sdl events
+	poll(&peripherals->vdc);
 
 	// flush the uart
 	fflush(stdout);
@@ -769,7 +784,7 @@ int main(int argc, char *argv[]) {
 
 	int delta;
 	int lastCycle = CYCLES;
-	while(1) {
+	while(running) {
 		while((delta = CYCLES-lastCycle) < SYNC_CYCLES) {
 #ifdef DEBUG
 			printf("\nT cycle %i:\n", CYCLES);
@@ -784,5 +799,7 @@ int main(int argc, char *argv[]) {
 	}
 	
 	close(audioDevice);
+	freeVDC(&peripherals->vdc);
+	freeVideo();
 	return 0;
 }
