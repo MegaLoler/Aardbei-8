@@ -1,13 +1,12 @@
 #include <stdint.h>
-#include <SDL2/SDL.h>
+#include <allegro5/allegro.h>
 
 #define VRAM_SIZE (1024*128)
 
 struct VDC {
 	uint8_t regs[47];
 	uint8_t vram[VRAM_SIZE];
-	SDL_Window *window;
-	SDL_Surface *surface;
+	ALLEGRO_DISPLAY *display;
 };
 
 void initVDC(struct VDC *);

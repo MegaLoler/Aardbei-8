@@ -2,7 +2,7 @@
 // 	complete opcodes
 //	v9958 emulation
 //	full uart emulation
-//	use sdl for audio instead of oss
+//	use allegro for audio instead of oss
 // 	mmap flash and eeprom
 // 	cli args parsing
 // 	cleaner debug output
@@ -17,7 +17,7 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/soundcard.h>
-#include <SDL2/SDL.h>
+#include <allegro5/allegro.h>
 #include <ayemu.h>
 #include "v9958.h"
 
@@ -253,15 +253,15 @@ void printState(struct CPUState *cpu) {
 			cpu->regs.r);
 }
 
-void poll(struct System *system) {
-	SDL_Event e;
+void pollInput(struct System *system) {
+	/*SDL_Event e;
 	while(SDL_PollEvent(&e) != 0) {
 		switch(e.type) {
 			case SDL_QUIT:
 				system->running = 0;
 				break;
 		}
-	}
+	}*/
 }
 
 // buffer a certain number of T cycles
@@ -289,8 +289,8 @@ void syncCycles(struct System *system, long int cycles) {
 		exit(1);
 	}*/
 
-	// poll for sdl events
-	//poll(system);
+	// poll for input events
+	pollInput(system);
 
 	// flush the uart
 	fflush(stdout);
@@ -766,9 +766,9 @@ void step(struct System *system) {
 
 struct System *mainSystem;
 
-void initSDL() {
-	if(SDL_Init(SDL_INIT_VIDEO) < 0) {
-		fprintf(stderr, "Could not initialize SDL: %s\n", SDL_GetError());
+void initAllegro() {
+	if(!al_init()) {
+		fprintf(stderr, "Could not initialize Allegro\n");
 		exit(1);
 	}
 }
@@ -781,7 +781,7 @@ void load(const char filename[], int size, uint8_t *destination) {
 }
 
 void init() {
-	initSDL();
+	initAllegro();
 	mainSystem = newSystem();
 
 	// load the program and save data
@@ -792,7 +792,6 @@ void init() {
 
 void quit() {
 	destroySystem(mainSystem);
-	SDL_Quit();
 }
 
 int main(int argc, char *argv[]) {

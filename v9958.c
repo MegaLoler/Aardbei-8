@@ -1,23 +1,23 @@
 #include <stdio.h>
 #include <stdint.h>
-#include <SDL2/SDL.h>
+#include <allegro5/allegro.h>
 #include "v9958.h"
 
 void initVDC(struct VDC *vdc) {
-/*	vdc->window = SDL_CreateWindow("v9958", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 0, 0, SDL_WINDOW_SHOWN);
-	if(vdc->window == NULL) {
-		fprintf(stderr, "SDL window could not be created: %s\n", SDL_GetError());
+	vdc->display = al_create_display(10, 10);
+	if(!vdc->display) {
+		fprintf(stderr, "Allegro display could not be created\n");
 		exit(1);
 	}
-	vdc->surface = SDL_GetWindowSurface(vdc->window);*/
 }
 
 void freeVDC(struct VDC *vdc) {
-//	SDL_DestroyWindow(vdc->window);
+	al_destroy_display(vdc->display);
 }
 
 void draw(struct VDC *vdc) {
-//	SDL_UpdateWindowSurface(vdc->window);
+	al_clear_to_color(al_map_rgb(1,0,0));
+	al_flip_display();
 }
 
 void vdcWrite(struct VDC *vdc, uint8_t port, uint8_t data) {
