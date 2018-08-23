@@ -10,30 +10,37 @@
 // 	gdb integration
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <stdint.h>
-#include <string.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/ioctl.h>
-#include <sys/soundcard.h>
+#include <time.h>
 #include <allegro5/allegro.h>
+#include "allegro5/allegro_audio.h"
 #include <ayemu.h>
 #include "v9958.h"
 
 //#define DEBUG
-//#define DEBUG_SYNC
 //#define DEBUG_IO
 //#define DEBUG_AY
 #define STRICT
 
-#define CPU_FREQ 3579545
-#define SYNC_CYCLES 8192 // lower = more accurate, higher = more performance
+#define CPU_RATE 3579545
+#define INSTR_BATCH_SIZE 100
 #define AUDIO_RATE 44100
-#define AUDIO_CHANNELS 2
-#define AUDIO_DEPTH 16
-#define AUDIO_BUFFER_SIZE (AUDIO_RATE * AUDIO_CHANNELS * (AUDIO_DEPTH >> 3))
-#define AUDIO_DEVICE "/dev/dsp/"
+#define AUDIO_DEPTH ALLEGRO_AUDIO_DEPTH_INT16
+#define AUDIO_CHANNELS ALLEGRO_CHANNEL_CONF_2
+#define AUDIO_BUFFER_FRAGS 8
+#define SAMPLES_PER_BUFFER 512
+#define BUFFER_LENGTH (SAMPLES_PER_BUFFER * 2 * 2)
+
+
+
+/* UTIL */
+
+long int nanos() {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+	return ts.tv_nsec + ts.tv_sec * 1000000000;
+}
+
 
 
 
@@ -137,7 +144,8 @@ struct AY {
 	ayemu_ay_t ay;
 	uint8_t regs[14];
 	uint8_t latch;
-	uint8_t buffer[AUDIO_BUFFER_SIZE];
+	ALLEGRO_AUDIO_STREAM *stream;
+	ALLEGRO_EVENT_QUEUE *queue;
 };
 
 struct Peripherals {
@@ -146,11 +154,7 @@ struct Peripherals {
 	struct VDC vdc;
 };
 
-void genAYSound(struct AY *ay, int length) {
-	ayemu_set_regs(&ay->ay, ay->regs);
-	ayemu_gen_sound(&ay->ay, ay->buffer, length);
-#ifdef DEBUG_AY
-	ayemu_ay_t *a = &ay->ay;
+void printAYRegisters(ayemu_ay_t *a) {
 	printf("\nAY REGS: A=%04d B=%04d C=%04d N=%02d R7=[%d%d%d%d%d%d] "
 			"\n   VOLS: A=%04d B=%04d C=%04d ENVFREQ=%d STYLE %d",
 			a->regs.tone_a, a->regs.tone_b, a->regs.tone_c, a->regs.noise,
@@ -158,7 +162,52 @@ void genAYSound(struct AY *ay, int length) {
 			a->regs.R7_noise_a, a->regs.R7_noise_b, a->regs.R7_noise_c,
 			a->regs.vol_a, a->regs.vol_b, a->regs.vol_c,
 			a->regs.env_freq, a->regs.env_style);
+}
+
+void play(struct AY *ay) {
+	ALLEGRO_EVENT event;
+	while(al_get_next_event(ay->queue, &event)) {
+		if(event.type == ALLEGRO_EVENT_AUDIO_STREAM_FRAGMENT) {
+			uint8_t *buffer = al_get_audio_stream_fragment(ay->stream);
+			if(!buffer) continue;
+			ayemu_ay_t *a = &ay->ay;
+			ayemu_set_regs(a, ay->regs);
+			ayemu_gen_sound(a, buffer, BUFFER_LENGTH);
+			if(!al_set_audio_stream_fragment(ay->stream, buffer)) {
+				fprintf(stderr, "Error setting stream fragment buffer\n");
+				exit(1);
+			}
+#ifdef DEBUG_AY
+			printAYRegisters(a);
 #endif
+		}
+	}
+}
+
+void initAY(struct AY* ay) {
+	ayemu_init(&ay->ay);
+	ay->stream = al_create_audio_stream(
+			AUDIO_BUFFER_FRAGS,
+			SAMPLES_PER_BUFFER,
+			AUDIO_RATE,
+			AUDIO_DEPTH,
+			AUDIO_CHANNELS);
+	if(!ay->stream)
+		fprintf(stderr, "Could not create audio stream\n");
+	else if (!al_attach_audio_stream_to_mixer(ay->stream, al_get_default_mixer()))
+		fprintf(stderr, "Could not attach audio stream to mixer\n");
+	else {
+		ay->queue = al_create_event_queue();
+		al_register_event_source(ay->queue, al_get_audio_stream_event_source(ay->stream));
+		return;
+	}
+	exit(1);
+}
+
+void destroyAY(struct AY* ay) {
+	al_drain_audio_stream(ay->stream);
+	al_destroy_event_queue(ay->queue);
+	al_destroy_audio_stream(ay->stream);
 }
 
 
@@ -170,21 +219,26 @@ struct System {
 	struct Memory memory;
 	struct Peripherals peripherals;
 	int cycles;
-	int running;
 };
+
+// return the amount of emulated nanoseconds passed since the system has started
+long int systemNanos(struct System *system) {
+	return (long)1000000000 * system->cycles / CPU_RATE;
+}
 
 struct System *newSystem() {
 	struct System *system = malloc(sizeof(struct System));
 	system->cycles = 0;
-	system->running = 1;
-	ayemu_init(&system->peripherals.ay1.ay);
-	ayemu_init(&system->peripherals.ay2.ay);
+	initAY(&system->peripherals.ay1);
+	initAY(&system->peripherals.ay2);
 	initVDC(&system->peripherals.vdc);
 	return system;
 }
 
 void destroySystem(struct System *system) {
-	freeVDC(&system->peripherals.vdc);
+	destroyAY(&system->peripherals.ay1);
+	destroyAY(&system->peripherals.ay2);
+	destroyVDC(&system->peripherals.vdc);
 	free(system);
 }
 
@@ -251,49 +305,6 @@ void printState(struct CPUState *cpu) {
 	printf("       I(0x%02x)    R(0x%02x)\n",
 			cpu->regs.i,
 			cpu->regs.r);
-}
-
-void pollInput(struct System *system) {
-	/*SDL_Event e;
-	while(SDL_PollEvent(&e) != 0) {
-		switch(e.type) {
-			case SDL_QUIT:
-				system->running = 0;
-				break;
-		}
-	}*/
-}
-
-// buffer a certain number of T cycles
-void syncCycles(struct System *system, long int cycles) {
-	struct Peripherals *peripherals = &system->peripherals;
-#ifdef DEBUG_SYNC
-	printf("\n[SYNC] T cycle %i", CYCLES);
-#endif
-
-	// audio processing
-	int length = cycles * AUDIO_BUFFER_SIZE / CPU_FREQ;
-	genAYSound(&peripherals->ay1, length);
-	genAYSound(&peripherals->ay2, length);
-	// mix the ay outputs and write to audio device
-	int i;
-	for(i = 0; i < length; i++) {
-		// i'm not sure about this
-		// what if its 16 bit samples, you kno?
-		peripherals->ay2.buffer[i] =
-			(peripherals->ay1.buffer[i] + peripherals->ay2.buffer[i])
-			/ 2;
-	}
-/*	if(write(audioDevice, &peripherals->ay2.buffer, length) == -1) {
-		fprintf(stderr, "Error writing to sound device\n");
-		exit(1);
-	}*/
-
-	// poll for input events
-	pollInput(system);
-
-	// flush the uart
-	fflush(stdout);
 }
 
 // log n T cycles
@@ -435,6 +446,7 @@ void step(struct System *system) {
 	struct CPUState *cpu = &system->cpu;
 	uint8_t opcode = fetchOpcode(system);
 #ifdef DEBUG
+	printf("\nT cycle %i:\n", system->cycles);
 	printf("@addr 0x%04x: got opcode 0x%02x", cpu->regs.pc-1, opcode);
 #endif
 
@@ -757,6 +769,7 @@ void step(struct System *system) {
 	}
 #ifdef DEBUG
 	printf("\n");
+	printState(cpu);
 #endif
 }
 
@@ -767,10 +780,15 @@ void step(struct System *system) {
 struct System *mainSystem;
 
 void initAllegro() {
-	if(!al_init()) {
+	if(!al_init())
 		fprintf(stderr, "Could not initialize Allegro\n");
-		exit(1);
+	else if(!al_install_audio())
+		fprintf(stderr, "Could not initialize Allegro audio\n");
+	else {
+		al_reserve_samples(0);
+		return;
 	}
+	exit(1);
 }
 
 // load a file into memory
@@ -792,27 +810,34 @@ void init() {
 
 void quit() {
 	destroySystem(mainSystem);
+	al_uninstall_audio();
+}
+
+// TODO: synchronous timing....
+void systemLoop() {
+	long int startNanos = nanos();
+	while(1) {
+		// ays
+		play(&mainSystem->peripherals.ay1);
+		play(&mainSystem->peripherals.ay2);
+
+		// cpu
+		// gotta catch it up to realtime
+		while(systemNanos(mainSystem) < nanos()-startNanos)
+			for(int i = 0; i < INSTR_BATCH_SIZE; i++)
+				step(mainSystem);
+
+		// uart
+		fflush(stdout);
+		
+		// vdc
+		draw(&mainSystem->peripherals.vdc);
+	}
 }
 
 int main(int argc, char *argv[]) {
 	init();
-
-	int delta;
-	int lastCycle = mainSystem->cycles;
-	while(mainSystem->running) {
-		while((delta = mainSystem->cycles-lastCycle) < SYNC_CYCLES) {
-#ifdef DEBUG
-			printf("\nT cycle %i:\n", mainSystem->cycles);
-#endif
-			step(mainSystem);
-#ifdef DEBUG
-			printState(cpu);
-#endif
-		}
-		syncCycles(mainSystem, delta);
-		lastCycle = mainSystem->cycles;
-	}
-	
+	systemLoop();
 	quit();
 	return 0;
 }

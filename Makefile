@@ -1,5 +1,5 @@
 aardbei: *.c
-	gcc -Wall -layemu -lallegro -o aardbei *.c
+	gcc -Wall -layemu -lallegro -lallegro_audio -o aardbei *.c
 
 run: aardbei
 	./aardbei

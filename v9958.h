@@ -10,7 +10,7 @@ struct VDC {
 };
 
 void initVDC(struct VDC *);
-void freeVDC(struct VDC *);
+void destroyVDC(struct VDC *);
 void draw(struct VDC *);
 
 void vdcWrite(struct VDC *, uint8_t, uint8_t);

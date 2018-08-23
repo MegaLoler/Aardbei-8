@@ -4,19 +4,19 @@
 #include "v9958.h"
 
 void initVDC(struct VDC *vdc) {
-	vdc->display = al_create_display(10, 10);
+	vdc->display = al_create_display(100, 100);
 	if(!vdc->display) {
 		fprintf(stderr, "Allegro display could not be created\n");
 		exit(1);
 	}
 }
 
-void freeVDC(struct VDC *vdc) {
+void destroyVDC(struct VDC *vdc) {
 	al_destroy_display(vdc->display);
 }
 
 void draw(struct VDC *vdc) {
-	al_clear_to_color(al_map_rgb(1,0,0));
+	al_clear_to_color(al_map_rgb(255,0,0));
 	al_flip_display();
 }
 
