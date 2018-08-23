@@ -6,6 +6,8 @@
 struct VDC {
 	uint8_t regs[47];
 	uint8_t vram[VRAM_SIZE];
+	uint8_t dataLatch;
+	int port1Sequence;
 	ALLEGRO_DISPLAY *display;
 };
 

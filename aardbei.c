@@ -8,6 +8,8 @@
 // 	cleaner debug output
 // 	refresh register
 // 	gdb integration
+// 	factor out the code into multiple files
+// 	make documentation n stuff
 
 #include <stdio.h>
 #include <stdint.h>
