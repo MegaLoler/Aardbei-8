@@ -2,7 +2,7 @@
 // 	complete opcodes
 //	v9958 emulation
 //	full uart emulation
-//	use allegro for audio instead of oss
+//	make the audio timing fixed.........
 // 	mmap flash and eeprom
 // 	cli args parsing
 // 	cleaner debug output
@@ -23,12 +23,11 @@
 #define STRICT
 
 #define CPU_RATE 3579545
-#define INSTR_BATCH_SIZE 100
 #define AUDIO_RATE 44100
 #define AUDIO_DEPTH ALLEGRO_AUDIO_DEPTH_INT16
 #define AUDIO_CHANNELS ALLEGRO_CHANNEL_CONF_2
-#define AUDIO_BUFFER_FRAGS 8
-#define SAMPLES_PER_BUFFER 512
+#define AUDIO_BUFFER_FRAGS 2
+#define SAMPLES_PER_BUFFER 1024
 #define BUFFER_LENGTH (SAMPLES_PER_BUFFER * 2 * 2)
 
 
@@ -813,19 +812,17 @@ void quit() {
 	al_uninstall_audio();
 }
 
-// TODO: synchronous timing....
 void systemLoop() {
 	long int startNanos = nanos();
 	while(1) {
-		// ays
-		play(&mainSystem->peripherals.ay1);
-		play(&mainSystem->peripherals.ay2);
-
 		// cpu
 		// gotta catch it up to realtime
 		while(systemNanos(mainSystem) < nanos()-startNanos)
-			for(int i = 0; i < INSTR_BATCH_SIZE; i++)
-				step(mainSystem);
+			step(mainSystem);
+
+		// ays
+		play(&mainSystem->peripherals.ay1);
+		play(&mainSystem->peripherals.ay2);
 
 		// uart
 		fflush(stdout);
